@@ -101,7 +101,7 @@ docker run ${DOCKER_TTY_ARGS} \
 	cd  /workspace
 
 	clang --target=powerpc-linux-gnu --sysroot=/ -B/usr/lib/gcc-cross/powerpc-linux-gnu/13 -T ./linker -Wl,-L/usr/powerpc-linux-gnu/lib -Wl,-rpath-link=/usr/powerpc-linux-gnu/lib -Os -nostartfiles -nostdlib ./test.c ./startup.s
-	python3 parseandcut.py a.out
+	llvm-objcopy -O binary a.out a.bin
 	hexdump -C a.bin
 	exec bash
     "
