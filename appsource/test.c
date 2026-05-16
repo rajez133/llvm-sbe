@@ -1,14 +1,35 @@
+#define PPE_LVD(_m_address, _m_data) \
+    asm volatile \
+    ( \
+      "lvd %[data], 0(%[address]) \n" \
+      :  [data]"=r"(_m_data) \
+      :  [address]"b"(_m_address) \
+    );
+
+// PPE Store Virtual Double operation
+#define PPE_STVD(_m_address, _m_data) \
+    asm volatile \
+    ( \
+      "stvd %[data], 0(%[address]) \n" \
+      : [data]"=&r"(_m_data) \
+      : "[data]"(_m_data), \
+      [address]"b"(_m_address) \
+      : "memory" \
+    );
+
 int main(void) {
   volatile int a = 20;
   volatile int b = 20;
   volatile int c = a + b;
 
   // Update ready bit in MSG REG (64-bit)
-  volatile unsigned long long *MSG_REG = (volatile unsigned long long *)0x50009;
+  unsigned int MSG_REG_ADDR = 0x50009;
+  volatile unsigned long long val;
+  PPE_LVD(MSG_REG_ADDR, val);
 
-  volatile unsigned long long val = *MSG_REG;
   val |= (1ULL << 63); // set bit 63
-  *MSG_REG = val; // store 64-bit value
+
+  PPE_STVD(MSG_REG_ADDR, val); // store 64-bit value
 
   // infinite loop
   while (1)
