@@ -5,6 +5,7 @@ CONTAINER_NAME="llvm-dev"
 LLVM_SRC_DIR="`pwd`/llvm"
 CPP_SRC_DIR="`pwd`/appsource"
 LLVM_BUILD_DIR="${LLVM_SRC_DIR}/build"
+VOLUME_NAME="llvm-build-cache"
 
 
 # --- CHECK LLVM SOURCE ---
@@ -62,6 +63,14 @@ else
   DOCKER_TTY_ARGS="--rm"
 fi
 
+# --- CREATE DOCKER VOLUME FOR BUILD CACHE ---
+if ! docker volume inspect "${VOLUME_NAME}" >/dev/null 2>&1; then
+    echo "Creating Docker volume ${VOLUME_NAME} for build cache..."
+    docker volume create "${VOLUME_NAME}"
+else
+    echo "Docker volume ${VOLUME_NAME} already exists."
+fi
+
 # --- RUN THE CONTAINER ---
 echo "Starting LLVM development container..."
 
@@ -69,17 +78,20 @@ docker run ${DOCKER_TTY_ARGS} \
     --rm \
     --name "${CONTAINER_NAME}" \
     -v "${LLVM_SRC_DIR}:/root/llvm-project" \
-    -v "${LLVM_BUILD_DIR}:/root/llvm-project/build" \
     -v "${CPP_SRC_DIR}:/workspace" \
-    -w /root/llvm-project/llvm/build \
-    llvm-dev:latest \
+    -v "${VOLUME_NAME}:/build" \
+    -w /root/llvm-project \
+    $IMAGE_NAME \
     bash -c "
         set -e;
 
+        # Use persistent build directory from Docker volume
+        mkdir -p /build/llvm-build
+        cd /build/llvm-build
 
         if [ ! -f build.ninja ]; then
             echo 'Configuring LLVM with CMake...';
-            cmake -G Ninja ../llvm \
+            cmake -G Ninja /root/llvm-project/llvm/llvm \
                 -DLLVM_ENABLE_PROJECTS='clang;lld' \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DLLVM_TARGETS_TO_BUILD='PowerPC' \
@@ -98,7 +110,7 @@ docker run ${DOCKER_TTY_ARGS} \
 
         echo 'LLVM build complete. Launching shell.';
         export PATH=/opt/llvm-install/bin:\$PATH
-	cd  /workspace
+ cd  /workspace
 
 	clang --target=powerpc-linux-gnu --sysroot=/ -B/usr/lib/gcc-cross/powerpc-linux-gnu/13 -T ./linker -Wl,-L/usr/powerpc-linux-gnu/lib -Wl,-rpath-link=/usr/powerpc-linux-gnu/lib -Os -nostartfiles -nostdlib ./test.c ./startup.s
 
@@ -109,5 +121,5 @@ docker run ${DOCKER_TTY_ARGS} \
     llvm-objdump -Sr a.out > a.dis
     cat a.dis
 
-	exec bash
+ exec bash
     "
