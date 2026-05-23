@@ -112,8 +112,14 @@ docker run ${DOCKER_TTY_ARGS} \
         export PATH=/opt/llvm-install/bin:\$PATH
  cd  /workspace
 
+ # Run the assembly test script first
+ echo '=== Running Assembly Test (simple_test_assembly/test_asm.sh) ==='
+ cd simple_test_assembly && ./test_asm.sh && cd ..
+
  # Run the build phases script
- ./build_phases.sh
+ # echo ''
+ # echo '=== Running Build Phases (build_phases.sh) ==='
+ # ./build_phases.sh
 
  exec bash
     "

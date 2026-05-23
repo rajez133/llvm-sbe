@@ -15,16 +15,44 @@ SECTIONS {
     /* Vectors should be at top of memory. */
     .startup . : {
         KEEP(*(.startup));
-    }
+    } > sram
 
     /* Text section */
    .text . : {
         *(.text)
         *(.text.*)
         . = ALIGN(8);
+    } > sram
+
+   /* Data sections */
+   .rodata . : {
+        *(.rodata)
+        *(.rodata.*)
+        . = ALIGN(8);
+    } > sram
+
+   .data . : {
+        *(.data)
+        *(.data.*)
+        . = ALIGN(8);
+    } > sram
+
+   .bss . : {
+        *(.bss)
+        *(.bss.*)
+        *(COMMON)
+        . = ALIGN(8);
+    } > sram
+
+   /* Discard unwanted sections */
+   /DISCARD/ : {
+        *(.rela.*)
+        *(.rel.*)
+        *(.comment)
+        *(.note.*)
+        *(.eh_frame)
+        *(.ARM.*)
     }
-   .remaining . : {
-        *(*)
-    }
+
    _sbe_image_size = . - _sppe_start;
 }

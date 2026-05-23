@@ -1,8 +1,9 @@
+// PPE Load Virtual Double operation
 #define PPE_LVD(_m_address, _m_data) \
     asm volatile \
     ( \
       "lvd %[data], 0(%[address]) \n" \
-      :  [data]"=r"(_m_data) \
+      :  [data]"=d"(_m_data) \
       :  [address]"b"(_m_address) \
     );
 
@@ -11,7 +12,7 @@
     asm volatile \
     ( \
       "stvd %[data], 0(%[address]) \n" \
-      : [data]"=&r"(_m_data) \
+      : [data]"=&d"(_m_data) \
       : "[data]"(_m_data), \
       [address]"b"(_m_address) \
       : "memory" \
