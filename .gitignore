@@ -6,5 +6,6 @@ appsource/*.s
 appsource/*.o
 appsource/*.dis
 llvm/
+.vscode/
 
 # Made with Bob
