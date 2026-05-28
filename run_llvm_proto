@@ -68,15 +68,21 @@ if [ ! -d "${LLVM_SRC_DIR}/llvm" ]; then
         git add include/llvm/TargetParser/PPCTargetParser.def
         git commit -m "Adding original PowerPC target description files"
 
-        # Apply PPE42 backend patch
-        PATCH_FILE="$(dirname "${LLVM_SRC_DIR}")/llvm_patches/0001-Adding-ppe-lvd-stvd-instruction-support-in-assembly-.patch"
-        if [ -f "${PATCH_FILE}" ]; then
-            echo "Applying PPE42 backend patch..."
-            git am "${PATCH_FILE}"
-            echo "PPE42 patch applied successfully."
-        else
-            echo "Warning: PPE42 patch file not found at ${PATCH_FILE}"
-            echo "Continuing without patch..."
+        # Apply PPE42 backend patches
+        PATCH_DIR="$(dirname "${LLVM_SRC_DIR}")/llvm_patches"
+        
+        # Apply patches in order
+        for PATCH_FILE in "${PATCH_DIR}"/*.patch; do
+            if [ -f "${PATCH_FILE}" ]; then
+                echo "Applying patch: $(basename "${PATCH_FILE}")..."
+                git am "${PATCH_FILE}"
+                echo "Patch applied successfully."
+            fi
+        done
+        
+        if [ ! -f "${PATCH_DIR}"/*.patch ]; then
+            echo "Warning: No patch files found in ${PATCH_DIR}"
+            echo "Continuing without patches..."
         fi
     else
         echo "Git repository already initialized, skipping git setup."

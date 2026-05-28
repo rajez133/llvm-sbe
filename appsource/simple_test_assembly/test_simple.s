@@ -17,6 +17,13 @@ _start:
 	# Store 64-bit value from d4 (R4:R5) back to address in r3
 	stvd	4, 0(3)
 
+	# Test VD31 register (R31:R0 wrap-around)
+	# Load into d31 (VD31 = R31:R0)
+	lvd	31, 8(3)
+
+	# Store from d31 back to memory
+	stvd	31, 16(3)
+
 	# Infinite loop
 .L_loop:
 	b	.L_loop

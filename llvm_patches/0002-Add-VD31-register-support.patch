@@ -1,0 +1,112 @@
+From f02a1f5d57ab3ee85e1cd9f71c5fbe8a46b63cdd Mon Sep 17 00:00:00 2001
+From: Rajees P P <rajerpp1@in.ibm.com>
+Date: Thu, 28 May 2026 16:51:21 +0530
+Subject: [PATCH] Adding d31 support
+
+---
+ lib/Target/PowerPC/AsmParser/PPCAsmParser.cpp     | 8 ++++----
+ lib/Target/PowerPC/MCTargetDesc/PPCMCTargetDesc.h | 2 +-
+ lib/Target/PowerPC/PPCRegisterInfo.td             | 6 ++++--
+ lib/Target/PowerPC/README_PPE42.md                | 8 +++++---
+ 4 files changed, 14 insertions(+), 10 deletions(-)
+
+diff --git a/lib/Target/PowerPC/AsmParser/PPCAsmParser.cpp b/lib/Target/PowerPC/AsmParser/PPCAsmParser.cpp
+index 28bac48..437ddf5 100644
+--- a/lib/Target/PowerPC/AsmParser/PPCAsmParser.cpp
++++ b/lib/Target/PowerPC/AsmParser/PPCAsmParser.cpp
+@@ -447,10 +447,10 @@ public:
+                                       (Kind == Immediate
+                                        && isUInt<5>(getImm())); }
+   bool isVDRRegNumber() const {
+-    // VDR registers: d0, d2-d9, d28-d30
++    // VDR registers: d0, d2-d9, d28-d31
+     if (Kind != Immediate) return false;
+     int64_t Reg = getImm();
+-    return Reg == 0 || (Reg >= 2 && Reg <= 9) || (Reg >= 28 && Reg <= 30);
++    return Reg == 0 || (Reg >= 2 && Reg <= 9) || (Reg >= 28 && Reg <= 31);
+   }
+ 
+   bool isEvenRegNumber() const { return isRegNumber() && (getImm() & 1) == 0; }
+@@ -1354,9 +1354,9 @@ MCRegister PPCAsmParser::matchRegisterName(int64_t &IntVal) {
+   else if (Name.starts_with("r"))
+     RegNo = isPPC64() ? XRegs[IntVal] : RRegs[IntVal];
+   else if (Name.starts_with("d")) {
+-    // VDR registers for PPE42 (d0, d2-d9, d28-d30)
++    // VDR registers for PPE42 (d0, d2-d9, d28-d31)
+     // These are already matched by MatchRegisterName, just extract the number
+-    // IntVal already contains the register number from line 1331
++    // IntVal already contains the register number from line 1342
+   }
+ 
+   getParser().Lex();
+diff --git a/lib/Target/PowerPC/MCTargetDesc/PPCMCTargetDesc.h b/lib/Target/PowerPC/MCTargetDesc/PPCMCTargetDesc.h
+index 96ac1b5..3110c91 100644
+--- a/lib/Target/PowerPC/MCTargetDesc/PPCMCTargetDesc.h
++++ b/lib/Target/PowerPC/MCTargetDesc/PPCMCTargetDesc.h
+@@ -287,7 +287,7 @@ using llvm::MCPhysReg;
+   static const MCPhysReg VDRRegs[32] = {                                       \
+       PPC::VD0, 0, PPC::VD2, PPC::VD3, PPC::VD4, PPC::VD5, PPC::VD6,           \
+       PPC::VD7, PPC::VD8, PPC::VD9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  \
+-      0, 0, 0, 0, PPC::VD28, PPC::VD29, PPC::VD30, 0};
++      0, 0, 0, 0, PPC::VD28, PPC::VD29, PPC::VD30, PPC::VD31};
+ 
+ namespace llvm {
+ namespace PPC {
+diff --git a/lib/Target/PowerPC/PPCRegisterInfo.td b/lib/Target/PowerPC/PPCRegisterInfo.td
+index a2539de..185f9be 100644
+--- a/lib/Target/PowerPC/PPCRegisterInfo.td
++++ b/lib/Target/PowerPC/PPCRegisterInfo.td
+@@ -160,7 +160,8 @@ class VDR<string n, bits<5> Enc, list<Register> subregs> : PPCReg<n> {
+ }
+ 
+ // Define VDR registers for valid pairs according to PPE42 ISA
+-// Valid VDR base registers: 0, 2-9, 28-30 (even registers only)
++// Valid VDR base registers: 0, 2-9, 28-31
++// Note: VD31 wraps around (R31:R0)
+ def VD0  : VDR<"d0",  0,  [R0,  R1]>;
+ def VD2  : VDR<"d2",  2,  [R2,  R3]>;
+ def VD3  : VDR<"d3",  3,  [R3,  R4]>;
+@@ -173,6 +174,7 @@ def VD9  : VDR<"d9",  9,  [R9,  R10]>;
+ def VD28 : VDR<"d28", 28, [R28, R29]>;
+ def VD29 : VDR<"d29", 29, [R29, R30]>;
+ def VD30 : VDR<"d30", 30, [R30, R31]>;
++def VD31 : VDR<"d31", 31, [R31, R0]>;
+ 
+ // Floating-point registers
+ foreach Index = 0-31 in {
+@@ -520,7 +522,7 @@ def VRSAVERC : RegisterClass<"PPC", [i32], 32, (add VRSAVE)>;
+ // VDR register class for PPE42 64-bit load/store operations
+ def VDRC : RegisterClass<"PPC", [i64], 64,
+                          (add VD0, VD2, VD3, VD4, VD5, VD6, VD7, VD8, VD9,
+-                              VD28, VD29, VD30)> {
++                              VD28, VD29, VD30, VD31)> {
+   let Size = 64;
+   let CopyCost = -1;
+ }
+diff --git a/lib/Target/PowerPC/README_PPE42.md b/lib/Target/PowerPC/README_PPE42.md
+index 6c7de43..c7684e2 100644
+--- a/lib/Target/PowerPC/README_PPE42.md
++++ b/lib/Target/PowerPC/README_PPE42.md
+@@ -42,14 +42,16 @@ Missing from standard PowerPC: R11, R12, R14-R27
+ ### Virtual Doubleword Registers (VDR)
+ VDRs are constructed from pairs of consecutive GPRs for 64-bit operations.
+ 
+-**Format**: `VDR(n) = {GPR(n), GPR(n+1)}`
++**Format**: `VDR(n) = {GPR(n), GPR(n+1 mod 32)}`
+ 
+ **Available VDRs**:
+ - VD0 (R0:R1)
+ - VD2-VD9 (R2:R3 through R9:R10)
+-- VD28-VD30 (R28:R29 through R30:R31)
++- VD28-VD31 (R28:R29 through R31:R0)
+ 
+-**Assembly Syntax**: `d0`, `d2`-`d9`, `d28`-`d30`
++**Note**: VD31 wraps around, combining R31 (high 32 bits) with R0 (low 32 bits)
++
++**Assembly Syntax**: `d0`, `d2`-`d9`, `d28`-`d31`
+ 
+ ### Condition Register
+ Only **CR0** exists (4 bits: LT, GT, EQ, SO)
+-- 
+2.48.1
+
