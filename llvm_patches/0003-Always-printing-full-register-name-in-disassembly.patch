@@ -1,0 +1,25 @@
+From 05b4df7ad6fdff0f029951a5b3fe2b3fa4cd20e9 Mon Sep 17 00:00:00 2001
+From: Rajees P P <rajerpp1@in.ibm.com>
+Date: Thu, 28 May 2026 21:46:11 +0530
+Subject: [PATCH] Always printing full register name in disassembly
+
+---
+ lib/Target/PowerPC/MCTargetDesc/PPCInstPrinter.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lib/Target/PowerPC/MCTargetDesc/PPCInstPrinter.cpp b/lib/Target/PowerPC/MCTargetDesc/PPCInstPrinter.cpp
+index b27bc3b..e4d553e 100644
+--- a/lib/Target/PowerPC/MCTargetDesc/PPCInstPrinter.cpp
++++ b/lib/Target/PowerPC/MCTargetDesc/PPCInstPrinter.cpp
+@@ -31,7 +31,7 @@ using namespace llvm;
+ // FIXME: Once the integrated assembler supports full register names, tie this
+ // to the verbose-asm setting.
+ static cl::opt<bool>
+-FullRegNames("ppc-asm-full-reg-names", cl::Hidden, cl::init(false),
++FullRegNames("ppc-asm-full-reg-names", cl::Hidden, cl::init(true),
+              cl::desc("Use full register names when printing assembly"));
+ 
+ // Useful for testing purposes. Prints vs{31-63} as v{0-31} respectively.
+-- 
+2.48.1
+
