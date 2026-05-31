@@ -51,7 +51,7 @@ if [ ! -d "${LLVM_SRC_DIR}/llvm" ]; then
     mv "${LLVM_SRC_DIR}"/llvm-project-* "${LLVM_SRC_DIR}/llvm"
 
     # Initialize git repo and apply PPE42 patch
-    cd "${LLVM_SRC_DIR}/llvm"
+    cd "${LLVM_SRC_DIR}/llvm/llvm"
 
     if [ ! -d ".git" ]; then
         echo "Initializing git repository in LLVM source..."
@@ -70,7 +70,7 @@ if [ ! -d "${LLVM_SRC_DIR}/llvm" ]; then
 
         # Apply PPE42 backend patches
         PATCH_DIR="$(dirname "${LLVM_SRC_DIR}")/llvm_patches"
-        
+
         # Apply patches in order
         for PATCH_FILE in "${PATCH_DIR}"/*.patch; do
             if [ -f "${PATCH_FILE}" ]; then
@@ -79,7 +79,7 @@ if [ ! -d "${LLVM_SRC_DIR}/llvm" ]; then
                 echo "Patch applied successfully."
             fi
         done
-        
+
         if [ ! -f "${PATCH_DIR}"/*.patch ]; then
             echo "Warning: No patch files found in ${PATCH_DIR}"
             echo "Continuing without patches..."
