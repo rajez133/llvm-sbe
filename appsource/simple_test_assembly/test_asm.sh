@@ -42,7 +42,7 @@ fi
 
 # Step 2: Link the object files
 echo "Step 2: Linking startup.o and test_simple.o..."
-ld.lld -T "${SCRIPT_DIR}/linker" \
+ld.lld -T "${APPSOURCE_DIR}/linker" \
     "${OUTPUT_DIR}/startup.o" \
     "${OUTPUT_DIR}/test_simple.o" \
     -o "${OUTPUT_DIR}/test_simple.elf"

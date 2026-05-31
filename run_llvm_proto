@@ -134,6 +134,7 @@ docker run ${DOCKER_TTY_ARGS} \
             cmake -G Ninja /root/llvm-project/llvm/llvm \
                 -DLLVM_ENABLE_PROJECTS='clang;lld' \
                 -DCMAKE_BUILD_TYPE=Release \
+                -DLLVM_ENABLE_ASSERTIONS=ON \
                 -DLLVM_TARGETS_TO_BUILD='PowerPC' \
                 -DCMAKE_INSTALL_PREFIX=/opt/llvm-install
         else
@@ -156,10 +157,10 @@ docker run ${DOCKER_TTY_ARGS} \
  echo '=== Running Assembly Test (simple_test_assembly/test_asm.sh) ==='
  cd simple_test_assembly && ./test_asm.sh && cd ..
 
- # Run the build phases script
- # echo ''
- # echo '=== Running Build Phases (build_phases.sh) ==='
- # ./build_phases.sh
+ # Run the basic C test (64-bit load/store)
+ echo ''
+ echo '=== Running Basic C Test (test_c/test_c.sh) ==='
+ cd test_c && ./test_c.sh && cd ..
 
  exec bash
     "
