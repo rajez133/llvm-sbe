@@ -46,6 +46,19 @@ ${OPT} -O2 -S ${OUTPUT_DIR}/test.ll -o ${OUTPUT_DIR}/test-opt.ll
 echo "  Generated: ${OUTPUT_DIR}/test-opt.ll"
 echo ""
 
+# Step 3a: Generate assembly with all pass outputs for documentation (run first to capture debug on crash)
+echo "Step 3a: Generating assembly with debug output (all passes)..."
+${LLC} -march=ppc32 \
+    -mcpu=ppe42 \
+    -O2 \
+    -filetype=asm \
+    -print-after-all \
+    ${OUTPUT_DIR}/test-opt.ll \
+    -o /dev/null \
+    2>&1 | tee ${OUTPUT_DIR}/llc-debug-all-passes.txt || true
+echo "  Generated: ${OUTPUT_DIR}/llc-debug-all-passes.txt"
+echo ""
+
 # Step 3: Generate assembly (for inspection)
 echo "Step 3: Generating PowerPC assembly (for inspection)..."
 ${LLC} -march=ppc32 \
@@ -55,19 +68,6 @@ ${LLC} -march=ppc32 \
     ${OUTPUT_DIR}/test-opt.ll \
     -o ${OUTPUT_DIR}/test.s
 echo "  Generated: ${OUTPUT_DIR}/test.s"
-echo ""
-
-# Step 3a: Generate assembly with all pass outputs for documentation
-echo "Step 3a: Generating assembly with debug output (all passes)..."
-${LLC} -march=ppc32 \
-    -mcpu=ppe42 \
-    -O2 \
-    -filetype=asm \
-    -print-after-all \
-    ${OUTPUT_DIR}/test-opt.ll \
-    -o /dev/null \
-    2>&1 | tee ${OUTPUT_DIR}/llc-debug-all-passes.txt
-echo "  Generated: ${OUTPUT_DIR}/llc-debug-all-passes.txt"
 echo ""
 
 # Step 3b: Generate SelectionDAG debug output

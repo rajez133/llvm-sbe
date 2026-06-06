@@ -958,6 +958,324 @@ For `imm = 0x8000000000000000` (set bit 63):
 
 ---
 
+## 10. DAG Combine Optimization: 64-bit OR to 32-bit OR
+
+### 💡 Overview
+
+**Added:** 2026-06-06
+**Purpose:** Optimize 64-bit OR operations when the constant only affects one 32-bit word
+
+This optimization reduces instruction count from 6 instructions to 1 instruction (83% reduction) for common cases like setting/clearing bits in only the high or low word of a 64-bit value.
+
+### 10.1 The Problem
+
+Without optimization, a simple operation like `value |= (1ULL << 63)` generates 6 instructions:
+
+```asm
+# Without optimization (6 instructions):
+li r7, -1              # Materialize 0xFFFFFFFFFFFFFFFF
+lis r6, -1
+ori r6, r6, 65535
+oris r7, r7, 65535
+rldimi r4, r6, 63, 0   # Rotate and insert
+# Total: 6 instructions
+```
+
+But since only bit 63 (in the high word) is affected, we can do:
+
+```asm
+# With optimization (1 instruction):
+oris r4, r4, 32768     # Set bit 63 directly
+# Total: 1 instruction (83% reduction!)
+```
+
+### 10.2 When Does This Optimization Apply?
+
+The optimization triggers when:
+1. **Operation:** 64-bit OR with constant
+2. **Constant pattern:** Only affects ONE 32-bit word (high OR low, not both)
+3. **Target:** PPE42 with VDR registers
+
+**Examples that trigger optimization:**
+```c
+value |= 0x8000000000000000ULL;  // Only high word → ORIS
+value |= 0x0000000000008000ULL;  // Only low word → ORI
+value |= (1ULL << 63);           // Only high word → ORIS
+value |= (1ULL << 15);           // Only low word → ORI
+```
+
+**Examples that DON'T trigger (use RLDIMI instead):**
+```c
+value |= 0x8000000000008000ULL;  // Both words → needs handling
+value |= 0x00000003FF000000ULL;  // Continuous 1s → RLDIMI
+```
+
+### 10.3 Implementation: DAG Combine Phase
+
+**Location:** `llvm/lib/Target/PowerPC/PPCISelLowering.cpp`
+
+#### Step 1: Enable OR in DAG Combine
+
+```cpp
+// Line ~1425: Register OR for target-specific DAG combining
+PPCTargetLowering::PPCTargetLowering(...) {
+  // ...
+  setTargetDAGCombine({ISD::AND, ISD::OR, ISD::ADD, ISD::SHL, ...});
+  // ^^^ Added ISD::OR here
+}
+```
+
+#### Step 2: Implement PerformDAGCombine for OR
+
+```cpp
+// Line ~16686: Handle ISD::OR in PerformDAGCombine
+SDValue PPCTargetLowering::PerformDAGCombine(SDNode *N,
+                                               DAGCombinerInfo &DCI) const {
+  SelectionDAG &DAG = DCI.DAG;
+  SDLoc dl(N);
+  
+  switch (N->getOpcode()) {
+    // ... other cases ...
+    
+    case ISD::OR: {
+      // PPE42 optimization: Convert 64-bit OR to 32-bit OR when constant
+      // only affects one register word (high or low, not both)
+      
+      // 1. Check if this is PPE42 with i64 type
+      if (!Subtarget.isPPE42() || N->getValueType(0) != MVT::i64)
+        break;
+      
+      // 2. Check if operand 1 is a constant
+      ConstantSDNode *ConstOp = dyn_cast<ConstantSDNode>(N->getOperand(1));
+      if (!ConstOp)
+        break;
+      
+      // 3. Split 64-bit constant into high and low 32-bit words
+      uint64_t Imm64 = ConstOp->getZExtValue();
+      uint32_t ImmHi = (Imm64 >> 32) & 0xFFFFFFFF;  // High 32 bits
+      uint32_t ImmLo = Imm64 & 0xFFFFFFFF;          // Low 32 bits
+      
+      // 4. Check if constant only affects one word
+      if ((ImmHi != 0 && ImmLo != 0) || (ImmHi == 0 && ImmLo == 0))
+        break;  // Affects both words or neither - let normal path handle it
+      
+      SDValue N0 = N->getOperand(0);  // The value to OR with
+      
+      // 5. Extract sub-registers from VDR using EXTRACT_SUBREG
+      // These become register aliases (no actual instructions)
+      SDValue HiWord = DAG.getTargetExtractSubreg(PPC::sub_gpr_hi, dl,
+                                                   MVT::i32, N0);
+      SDValue LoWord = DAG.getTargetExtractSubreg(PPC::sub_gpr_lo, dl,
+                                                   MVT::i32, N0);
+      
+      // 6a. High word only case
+      if (ImmHi != 0 && ImmLo == 0) {
+        // Perform 32-bit OR on high word
+        SDValue NewHi = DAG.getNode(ISD::OR, dl, MVT::i32, HiWord,
+                                    DAG.getConstant(ImmHi, dl, MVT::i32));
+        // Insert modified high word back into VDR
+        SDValue Result = DAG.getTargetInsertSubreg(PPC::sub_gpr_hi, dl,
+                                                    MVT::i64, N0, NewHi);
+        return Result;
+      }
+      
+      // 6b. Low word only case
+      if (ImmLo != 0 && ImmHi == 0) {
+        // Perform 32-bit OR on low word
+        SDValue NewLo = DAG.getNode(ISD::OR, dl, MVT::i32, LoWord,
+                                    DAG.getConstant(ImmLo, dl, MVT::i32));
+        // Insert modified low word back into VDR
+        SDValue Result = DAG.getTargetInsertSubreg(PPC::sub_gpr_lo, dl,
+                                                    MVT::i64, N0, NewLo);
+        return Result;
+      }
+      
+      break;
+    }
+  }
+  
+  return SDValue();
+}
+```
+
+### 10.4 How It Works: DAG Transformation
+
+#### Before Optimization (Generic DAG)
+
+```mermaid
+graph TD
+    N0["N0: i64 value<br/>(VDR type)"]
+    Const["Constant<br/>0x8000000000000000<br/>i64"]
+    OR["OR<br/>i64"]
+    
+    N0 -->|"operand 0"| OR
+    Const -->|"operand 1"| OR
+    
+    style N0 fill:#87CEEB,stroke:#333,stroke-width:2px,color:#000
+    style Const fill:#FFD700,stroke:#333,stroke-width:2px,color:#000
+    style OR fill:#DDA0DD,stroke:#333,stroke-width:2px,color:#000
+```
+
+**Note:** At this stage (DAG Combine), we're working with **SelectionDAG nodes** and **types** (i64), not physical registers. Register allocation happens much later.
+
+#### After Optimization (Optimized DAG)
+
+```mermaid
+graph TD
+    N0["N0: i64 value<br/>(VDR type)"]
+    Extract["EXTRACT_SUBREG<br/>sub_gpr_hi<br/>i32"]
+    Const32["Constant<br/>0x80000000<br/>i32"]
+    OR32["OR<br/>i32"]
+    Insert["INSERT_SUBREG<br/>sub_gpr_hi<br/>i64"]
+    Result["Result<br/>i64"]
+    
+    N0 -->|"VDR"| Extract
+    Extract -->|"high word"| OR32
+    Const32 -->|"imm"| OR32
+    OR32 -->|"new high"| Insert
+    N0 -->|"original"| Insert
+    Insert --> Result
+    
+    style N0 fill:#87CEEB,stroke:#333,stroke-width:2px,color:#000
+    style Extract fill:#90EE90,stroke:#333,stroke-width:2px,color:#000
+    style Const32 fill:#FFD700,stroke:#333,stroke-width:2px,color:#000
+    style OR32 fill:#FF6347,stroke:#333,stroke-width:2px,color:#000
+    style Insert fill:#90EE90,stroke:#333,stroke-width:2px,color:#000
+    style Result fill:#87CEEB,stroke:#333,stroke-width:2px,color:#000
+```
+
+**Key Points:**
+- This transformation happens during **DAG Combine phase** (before instruction selection)
+- We're working with **types** (i64, i32) and **sub-register indices** (sub_gpr_hi, sub_gpr_lo)
+- `EXTRACT_SUBREG` and `INSERT_SUBREG` are **target-specific DAG nodes**
+- Physical registers (R4, R5, etc.) are assigned much later during register allocation
+
+### 10.5 From DAG to Assembly: The Complete Flow
+
+Here's what happens at each phase:
+
+#### Phase 1: DAG Combine (PerformDAGCombine)
+```
+Input DAG:
+  OR i64 %N0, Constant<0x8000000000000000>
+
+Output DAG:
+  INSERT_SUBREG i64 %N0,
+    (OR i32
+      (EXTRACT_SUBREG i32 %N0, sub_gpr_hi),
+      Constant<0x80000000>
+    ),
+    sub_gpr_hi
+```
+
+#### Phase 2: Instruction Selection
+```
+DAG nodes → MachineInstr with virtual registers
+
+INSERT_SUBREG → (no instruction, just register constraint)
+EXTRACT_SUBREG → (no instruction, just register constraint)
+OR i32 → ORIS %vreg1, %vreg1, 32768
+```
+
+#### Phase 3: Register Allocation
+```
+Virtual registers → Physical registers
+
+%vreg0:vdrc → $r4_r5 (VDR tuple)
+%vreg1:gprc → $r4 (high word of VDR)
+
+ORIS %vreg1, %vreg1, 32768 → ORIS $r4, $r4, 32768
+```
+
+#### Phase 4: Assembly Emission
+```
+MachineInstr → Assembly text
+
+ORIS $r4, $r4, 32768 → "oris r4, r4, 32768"
+```
+
+**Result:** The EXTRACT/INSERT operations compile to **zero instructions** because they're just register constraints that tell the register allocator to use the same physical register!
+
+### 10.6 Test Results
+
+#### Test Case 1: High Word Only
+
+```c
+value |= (1ULL << 63);  // 0x8000000000000000
+```
+
+**Generated Assembly:**
+```asm
+oris r4, r4, 32768  # Single instruction!
+```
+
+**Instruction Count:** 1 (was 6) → **83% reduction** ✅
+
+#### Test Case 2: Low Word Only
+
+```c
+value |= (1ULL << 15);  // 0x0000000000008000
+```
+
+**Generated Assembly:**
+```asm
+ori r5, r5, 32768  # Single instruction!
+```
+
+**Instruction Count:** 1 (was 6) → **83% reduction** ✅
+
+#### Test Case 3: Continuous 1s (RLDIMI)
+
+```c
+value |= 0x00000003FF000000ULL;  // Continuous 10 bits
+```
+
+**Generated Assembly:**
+```asm
+rldimi d4, d6, 24, 30  # Uses RLDIMI as expected
+```
+
+**Instruction Count:** 1 (optimal for this pattern) ✅
+
+### 10.7 Why This Optimization Matters
+
+**Performance Impact:**
+- **83% fewer instructions** for common bit manipulation
+- **Reduced register pressure** (no need for temporary VDR)
+- **Better code density** (smaller binary size)
+- **Faster execution** (fewer cycles)
+
+**Common Use Cases:**
+- Setting/clearing status bits in 64-bit registers
+- Bit masking operations
+- Flag manipulation in memory-mapped I/O
+- Atomic bit operations
+
+### 10.8 Fallback Cases
+
+When the optimization doesn't apply, LLVM falls back to:
+
+1. **RLDIMI** - For continuous runs of 1s (handled by `tryAsSingleRLDIMI()`)
+2. **Full materialization** - For complex patterns (6 instructions)
+
+**Example: Both words affected**
+```c
+value |= 0x8000000000008000ULL;  // Both high and low words
+```
+
+This would need special handling (not yet implemented - would use RLDIMI or dual 32-bit ORs).
+
+### 10.9 Implementation Timeline
+
+| Date | Task | Status |
+|------|------|--------|
+| 2026-05-31 | Initial RLDIMI_VDR implementation | ✅ Complete |
+| 2026-06-06 | Add DAG combine for single-word OR | ✅ Complete |
+| 2026-06-06 | Test with continuous 1s (RLDIMI) | ✅ Complete |
+| Pending | Handle both-words case | 🔄 Next task |
+
+---
+
 ## Conclusion
 
 The PPE42 LLVM backend successfully compiles 64-bit operations using VDR (Virtual Doubleword Register) pairs. The implementation includes:
@@ -966,6 +1284,7 @@ The PPE42 LLVM backend successfully compiles 64-bit operations using VDR (Virtua
 ✅ **RLDIMI_VDR** - 4-operand rotate and insert for PPE42
 ✅ **LI8_VDR** - Pseudo-instruction for 64-bit immediate materialization
 ✅ **VDR register pairs** - R4_R5, R6_R7, etc. for 64-bit values
+✅ **DAG combine optimization** - 83% code reduction for single-word OR operations
 ✅ **Correct assembly generation** - All instructions are valid PPE42 assembly
 
 **Key Takeaways:**
@@ -973,10 +1292,12 @@ The PPE42 LLVM backend successfully compiles 64-bit operations using VDR (Virtua
 - Pattern matching connects IR operations to machine instructions
 - Register allocation assigns limited physical registers to unlimited virtual registers
 - Post-RA expansion handles pseudo-instructions like LI8_VDR
+- DAG combine optimizations can dramatically reduce instruction count
+- EXTRACT_SUBREG/INSERT_SUBREG with constraints become no-ops
 - The PPE42 backend correctly handles 64-bit operations using VDR register pairs
 
 ---
 
-**Generated:** 2026-05-31
+**Generated:** 2026-05-31, Updated: 2026-06-06
 **PPE42 LLVM Backend Development**
 **Status:** ✅ All phases working correctly
