@@ -18,6 +18,7 @@
 7. [Phase 4: Assembly Emission](#7-phase-4-assembly-emission)
 8. [Deep Dive: Key Concepts](#8-deep-dive-key-concepts)
 9. [Implementation Details](#9-implementation-details)
+10. [DAG Combine Optimization: 64-bit OR to 32-bit OR](#10-dag-combine-optimization-64-bit-or-to-32-bit-or)
 
 ---
 
@@ -1098,7 +1099,237 @@ SDValue PPCTargetLowering::PerformDAGCombine(SDNode *N,
 }
 ```
 
-### 10.4 How It Works: DAG Transformation
+### 10.4 Deep Dive: Understanding Each Object and Operation
+
+This section provides a detailed explanation of every object, type, and operation in the `ISD::OR` case of `PerformDAGCombine`.
+
+#### Key LLVM Objects and Types
+
+**1. SDNode (SelectionDAG Node)**
+```cpp
+SDNode *N  // The OR node we're optimizing
+```
+- **What it is**: A node in the SelectionDAG graph representing an operation
+- **Contains**: Opcode (ISD::OR), operands, result type, debug location
+- **In our case**: Represents the 64-bit OR operation from LLVM IR
+- **Example**: `OR i64 %value, 0x8000000000000000`
+
+**2. SDValue (SelectionDAG Value)**
+```cpp
+SDValue N0 = N->getOperand(0);  // The value being OR'd
+```
+- **What it is**: A handle to a specific output of an SDNode
+- **Structure**: `{SDNode*, unsigned ResNo}` - pointer to node + result number
+- **Why needed**: Some nodes produce multiple results (e.g., load produces value + chain)
+- **In our case**: Points to the i64 value we're modifying
+
+**3. SelectionDAG (DAG)**
+```cpp
+SelectionDAG &DAG = DCI.DAG;
+```
+- **What it is**: The graph containing all SDNodes for current function
+- **Purpose**: Manages node creation, deletion, and optimization
+- **Methods used**:
+  - `getTargetExtractSubreg()` - Create EXTRACT_SUBREG node
+  - `getNode()` - Create generic operation node (OR, ADD, etc.)
+  - `getConstant()` - Create constant node
+  - `getTargetInsertSubreg()` - Create INSERT_SUBREG node
+
+**4. SDLoc (Source Debug Location)**
+```cpp
+SDLoc dl(N);
+```
+- **What it is**: Debug information (file, line, column) for error messages
+- **Purpose**: Preserve source location through compilation for debugging
+- **Usage**: Passed to all node creation functions
+
+**5. MVT (Machine Value Type)**
+```cpp
+MVT::i64  // 64-bit integer type
+MVT::i32  // 32-bit integer type
+```
+- **What it is**: Represents data types in SelectionDAG
+- **Common types**: i1, i8, i16, i32, i64, f32, f64, v4i32 (vector)
+- **Purpose**: Type checking and instruction selection
+
+**6. ConstantSDNode**
+```cpp
+ConstantSDNode *ConstOp = dyn_cast<ConstantSDNode>(N->getOperand(1));
+```
+- **What it is**: SDNode subclass representing a constant value
+- **Methods**:
+  - `getZExtValue()` - Get constant as zero-extended uint64_t
+  - `getSExtValue()` - Get constant as sign-extended int64_t
+- **In our case**: The constant being OR'd (e.g., 0x8000000000000000)
+
+#### Line-by-Line Explanation
+
+**Lines 16690-16691: Target and Type Check**
+```cpp
+if (!Subtarget.isPPE42() || N->getValueType(0) != MVT::i64)
+  break;
+```
+- **`Subtarget.isPPE42()`**: Check if we're compiling for PPE42 target
+  - Returns true only for `-mcpu=ppe42`
+  - Ensures optimization only runs on correct architecture
+- **`N->getValueType(0)`**: Get the result type of the OR operation
+  - `0` means first result (OR only has one result)
+  - Must be `MVT::i64` (64-bit integer)
+- **Why check**: This optimization is PPE42-specific and only works for 64-bit OR
+
+**Lines 16693-16695: Extract Constant Operand**
+```cpp
+ConstantSDNode *ConstOp = dyn_cast<ConstantSDNode>(N->getOperand(1));
+if (!ConstOp)
+  break;
+```
+- **`N->getOperand(1)`**: Get second operand of OR (the constant)
+  - Operand 0 = value being modified
+  - Operand 1 = constant to OR with
+- **`dyn_cast<ConstantSDNode>(...)`**: Safe cast to ConstantSDNode
+  - Returns nullptr if operand is not a constant
+  - Example: `OR %reg, %other_reg` would return nullptr
+- **Why check**: Optimization only works with constant operands
+
+**Lines 16697-16699: Split 64-bit Constant**
+```cpp
+uint64_t Imm64 = ConstOp->getZExtValue();
+uint32_t ImmHi = (Imm64 >> 32) & 0xFFFFFFFF;
+uint32_t ImmLo = Imm64 & 0xFFFFFFFF;
+```
+- **`getZExtValue()`**: Extract constant as unsigned 64-bit integer
+  - Example: For `0x8000000000000000`, returns 9223372036854775808
+- **`Imm64 >> 32`**: Shift right 32 bits to get high word
+  - Example: `0x8000000000000000 >> 32` = `0x80000000`
+- **`& 0xFFFFFFFF`**: Mask to ensure 32-bit value
+  - Prevents sign extension issues
+- **Result**:
+  - `ImmHi` = high 32 bits (bits 0-31 in big-endian)
+  - `ImmLo` = low 32 bits (bits 32-63 in big-endian)
+
+**Lines 16702-16703: Check Single-Word Modification**
+```cpp
+if ((ImmHi != 0 && ImmLo != 0) || (ImmHi == 0 && ImmLo == 0))
+  break;
+```
+- **First condition**: `ImmHi != 0 && ImmLo != 0`
+  - Both words have non-zero bits
+  - Example: `0x8000000000008000` (both words affected)
+  - **Action**: Break (let RLDIMI or other handler deal with it)
+- **Second condition**: `ImmHi == 0 && ImmLo == 0`
+  - Constant is zero (no-op OR)
+  - Example: `OR %value, 0`
+  - **Action**: Break (let dead code elimination remove it)
+- **If we continue**: Exactly one word is affected (our optimization case)
+
+**Line 16705: Get Value Operand**
+```cpp
+SDValue N0 = N->getOperand(0);
+```
+- **`N->getOperand(0)`**: Get first operand (the value being OR'd)
+- **Type**: SDValue pointing to i64 node
+- **Example**: If IR is `%2 = or i64 %1, 0x8000000000000000`
+  - `N0` points to the node producing `%1`
+- **Will be**: A VDR (Virtual Doubleword Register) value
+
+**Lines 16709-16710: Extract Sub-Registers**
+```cpp
+SDValue HiWord = DAG.getTargetExtractSubreg(PPC::sub_gpr_hi, dl, MVT::i32, N0);
+SDValue LoWord = DAG.getTargetExtractSubreg(PPC::sub_gpr_lo, dl, MVT::i32, N0);
+```
+- **`getTargetExtractSubreg()`**: Create target-specific EXTRACT_SUBREG node
+  - **Target-specific**: Uses PowerPC sub-register indices
+  - **Not generic**: Won't work on x86, ARM, etc.
+- **Parameters**:
+  - `PPC::sub_gpr_hi`: Sub-register index for high 32 bits
+    - Defined in `PPCRegisterInfo.td`
+    - Maps VDR → high GPR (e.g., R4_R5 → R4)
+  - `dl`: Debug location
+  - `MVT::i32`: Result type (32-bit integer)
+  - `N0`: Source value (64-bit VDR)
+- **Result**:
+  - `HiWord` = SDValue representing high 32 bits as i32
+  - `LoWord` = SDValue representing low 32 bits as i32
+- **Key point**: These are **not instructions**! They're constraints for register allocation
+
+**Lines 16712-16720: High Word Case**
+```cpp
+if (ImmHi != 0 && ImmLo == 0) {
+  SDValue NewHi = DAG.getNode(ISD::OR, dl, MVT::i32, HiWord,
+                              DAG.getConstant(ImmHi, dl, MVT::i32));
+  SDValue Result = DAG.getTargetInsertSubreg(PPC::sub_gpr_hi, dl,
+                                              MVT::i64, N0, NewHi);
+  return Result;
+}
+```
+
+**Line 16712**: Check if only high word affected
+- `ImmHi != 0`: High word has bits to set
+- `ImmLo == 0`: Low word unchanged
+- Example: `0x8000000000000000` (only bit 0 set)
+
+**Lines 16714-16715**: Create 32-bit OR operation
+- **`DAG.getNode(ISD::OR, ...)`**: Create generic OR node
+  - `ISD::OR`: Generic OR opcode (not target-specific)
+  - `dl`: Debug location
+  - `MVT::i32`: Result type (32-bit)
+  - `HiWord`: First operand (extracted high word)
+  - `DAG.getConstant(ImmHi, dl, MVT::i32)`: Second operand (32-bit constant)
+- **Result**: `NewHi` = SDValue representing `HiWord | ImmHi` (32-bit)
+- **Example**: If `ImmHi = 0x80000000`, creates `OR i32 %hi, 0x80000000`
+
+**Lines 16718**: Insert modified high word back
+- **`getTargetInsertSubreg()`**: Create target-specific INSERT_SUBREG node
+- **Parameters**:
+  - `PPC::sub_gpr_hi`: Which sub-register to replace
+  - `dl`: Debug location
+  - `MVT::i64`: Result type (64-bit VDR)
+  - `N0`: Original 64-bit value (base)
+  - `NewHi`: New value for high word (32-bit)
+- **Semantics**: "Take N0, replace its high word with NewHi, return as i64"
+- **Key point**: Also **not an instruction**! Register allocation constraint
+
+**Line 16719**: Return optimized DAG
+- **`return Result`**: Replace original OR node with new subgraph
+- **Effect**: Original `OR i64 %value, 0x8000000000000000` becomes:
+  ```
+  %hi = EXTRACT_SUBREG %value, sub_gpr_hi  (i32)
+  %new_hi = OR i32 %hi, 0x80000000
+  %result = INSERT_SUBREG %value, %new_hi, sub_gpr_hi  (i64)
+  ```
+
+**Lines 16722-16730: Low Word Case**
+- **Identical logic** to high word case
+- **Difference**: Uses `sub_gpr_lo` instead of `sub_gpr_hi`
+- **Difference**: Uses `ImmLo` instead of `ImmHi`
+
+#### Why This Works: The Magic of Sub-Register Constraints
+
+**During Instruction Selection:**
+```
+EXTRACT_SUBREG %vdrc, sub_gpr_hi → (no instruction, just use high GPR)
+OR i32 %gpr, constant             → ORIS instruction
+INSERT_SUBREG %vdrc, %gpr         → (no instruction, GPR already in place)
+```
+
+**After Register Allocation:**
+```
+Assume %value allocated to R4_R5 (VDR)
+
+EXTRACT_SUBREG R4_R5, sub_gpr_hi → Use R4 (no instruction!)
+ORIS R4, R4, 32768                → Single instruction
+INSERT_SUBREG R4_R5, R4           → R4 already in R4_R5 (no instruction!)
+
+Final: Just "ORIS R4, R4, 32768"
+```
+
+**The constraint system ensures:**
+1. VDR is allocated to consecutive GPRs (e.g., R4_R5)
+2. EXTRACT_SUBREG just uses the appropriate GPR (R4 or R5)
+3. INSERT_SUBREG ensures result uses same VDR tuple
+4. No actual extract/insert instructions generated!
+
+### 10.5 How It Works: DAG Transformation
 
 #### Before Optimization (Generic DAG)
 

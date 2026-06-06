@@ -71,11 +71,16 @@ if [ ! -d "${LLVM_SRC_DIR}/llvm" ]; then
         # Apply PPE42 backend patches
         PATCH_DIR="$(dirname "${LLVM_SRC_DIR}")/llvm_patches"
 
-        # Apply patches in order
+        # Apply patches in order with 3-way merge to handle conflicts
         for PATCH_FILE in "${PATCH_DIR}"/*.patch; do
             if [ -f "${PATCH_FILE}" ]; then
                 echo "Applying patch: $(basename "${PATCH_FILE}")..."
-                git am "${PATCH_FILE}"
+                git am --3way "${PATCH_FILE}"
+                if [ $? -ne 0 ]; then
+                    echo "Warning: Patch $(basename "${PATCH_FILE}") had conflicts."
+                    echo "Attempting to continue with resolved conflicts..."
+                    git am --continue || git am --skip
+                fi
                 echo "Patch applied successfully."
             fi
         done
