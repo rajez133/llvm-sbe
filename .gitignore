@@ -7,5 +7,7 @@ appsource/*.o
 appsource/*.dis
 llvm/
 .vscode/
+temp/
+**/.DS_Store
 
 # Made with Bob
