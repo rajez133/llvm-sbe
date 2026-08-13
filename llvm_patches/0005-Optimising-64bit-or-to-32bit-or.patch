@@ -1,0 +1,92 @@
+From 496bf6d63765b434bb8136c95e0cd14520712cdd Mon Sep 17 00:00:00 2001
+From: Rajees P P <rajerpp1@in.ibm.com>
+Date: Sat, 6 Jun 2026 13:40:00 +0530
+Subject: [PATCH] Optimising 64bit or in case of it can be achieved by 2 32bit
+ or
+
+---
+ lib/Target/PowerPC/PPCISelLowering.cpp | 54 +++++++++++++++++++++++++-
+ 1 file changed, 53 insertions(+), 1 deletion(-)
+
+diff --git a/lib/Target/PowerPC/PPCISelLowering.cpp b/lib/Target/PowerPC/PPCISelLowering.cpp
+index c2a0429..2cd6d6a 100644
+--- a/lib/Target/PowerPC/PPCISelLowering.cpp
++++ b/lib/Target/PowerPC/PPCISelLowering.cpp
+@@ -767,6 +767,7 @@ PPCTargetLowering::PPCTargetLowering(const PPCTargetMachine &TM,
+     if (Subtarget.isPPE42()) {
+       addRegisterClass(MVT::i64, &PPC::VDRCRegClass);
+       // VDR supports load/store and basic bitwise operations
++      // We use REG_SEQUENCE instead of BUILD_PAIR for better register allocation
+     }
+   }
+ 
+@@ -1419,7 +1420,7 @@ PPCTargetLowering::PPCTargetLowering(const PPCTargetMachine &TM,
+   setStackPointerRegisterToSaveRestore(isPPC64 ? PPC::X1 : PPC::R1);
+ 
+   // We have target-specific dag combine patterns for the following nodes:
+-  setTargetDAGCombine({ISD::AND, ISD::ADD, ISD::SHL, ISD::SRA, ISD::SRL,
++  setTargetDAGCombine({ISD::AND, ISD::OR, ISD::ADD, ISD::SHL, ISD::SRA, ISD::SRL,
+                        ISD::MUL, ISD::FMA, ISD::SINT_TO_FP, ISD::BUILD_VECTOR});
+   if (Subtarget.hasFPCVT())
+     setTargetDAGCombine(ISD::UINT_TO_FP);
+@@ -16679,6 +16680,57 @@ SDValue PPCTargetLowering::PerformDAGCombine(SDNode *N,
+   default: break;
+   case ISD::ADD:
+     return combineADD(N, DCI);
++  case ISD::OR: {
++    // PPE42 optimization: Convert 64-bit OR to 32-bit OR when constant
++    // only affects one 32-bit word of the VDR register pair
++    //
++    // Strategy: Use EXTRACT_SUBREG to get sub-registers, perform 32-bit OR,
++    // then use INSERT_SUBREG to rebuild. With proper register constraints,
++    // the extract/insert operations become no-ops (just register aliases).
++    if (!Subtarget.isPPE42() || N->getValueType(0) != MVT::i64)
++      break;
++    
++    ConstantSDNode *ConstOp = dyn_cast<ConstantSDNode>(N->getOperand(1));
++    if (!ConstOp)
++      break;
++    
++    uint64_t Imm64 = ConstOp->getZExtValue();
++    uint32_t ImmHi = (Imm64 >> 32) & 0xFFFFFFFF;
++    uint32_t ImmLo = Imm64 & 0xFFFFFFFF;
++    
++    // Check if constant only affects one word
++    if ((ImmHi != 0 && ImmLo != 0) || (ImmHi == 0 && ImmLo == 0))
++      break;  // Affects both words or neither - let normal path handle it
++    
++    SDValue N0 = N->getOperand(0);
++    
++    // Extract sub-registers from VDR
++    // These will be assigned to the same physical registers as N0's tuple
++    SDValue HiWord = DAG.getTargetExtractSubreg(PPC::sub_gpr_hi, dl, MVT::i32, N0);
++    SDValue LoWord = DAG.getTargetExtractSubreg(PPC::sub_gpr_lo, dl, MVT::i32, N0);
++    
++    if (ImmHi != 0 && ImmLo == 0) {
++      // Constant only affects high word - do 32-bit OR on high word
++      SDValue NewHi = DAG.getNode(ISD::OR, dl, MVT::i32, HiWord,
++                                  DAG.getConstant(ImmHi, dl, MVT::i32));
++      // Rebuild VDR using INSERT_SUBREG
++      // Start with original VDR, insert modified high word
++      SDValue Result = DAG.getTargetInsertSubreg(PPC::sub_gpr_hi, dl, MVT::i64, N0, NewHi);
++      return Result;
++    }
++    
++    if (ImmLo != 0 && ImmHi == 0) {
++      // Constant only affects low word - do 32-bit OR on low word
++      SDValue NewLo = DAG.getNode(ISD::OR, dl, MVT::i32, LoWord,
++                                  DAG.getConstant(ImmLo, dl, MVT::i32));
++      // Rebuild VDR using INSERT_SUBREG
++      // Start with original VDR, insert modified low word
++      SDValue Result = DAG.getTargetInsertSubreg(PPC::sub_gpr_lo, dl, MVT::i64, N0, NewLo);
++      return Result;
++    }
++    
++    break;
++  }
+   case ISD::AND: {
+     // We don't want (and (zext (shift...)), C) if C fits in the width of the
+     // original input as that will prevent us from selecting optimal rotates.
+-- 
+2.48.1
+

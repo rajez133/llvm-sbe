@@ -1,3 +1,11 @@
 appsource/a.bin
 appsource/a.out
+appsource/output/
+appsource/*.ll
+appsource/*.s
+appsource/*.o
+appsource/*.dis
 llvm/
+.vscode/
+
+# Made with Bob

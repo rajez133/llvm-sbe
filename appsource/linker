@@ -1,27 +1,58 @@
 OUTPUT_FORMAT(elf32-powerpc);
 
+TAP_SRAM_ORIGIN = 0xFFFA0000;
+TAP_SRAM_SIZE   = 0x60000;
+
 MEMORY {
-    sram    :   ORIGIN = 0xFFE80000, LENGTH = 0x180000
+    sram    :   ORIGIN = TAP_SRAM_ORIGIN, LENGTH = TAP_SRAM_SIZE
 }
 
 SECTIONS {
     /* Text, read only data and other permanent read-only sections. */
-    . = 0xFFE80000;
+    . = TAP_SRAM_ORIGIN;
     _sppe_start = .;
 
     /* Vectors should be at top of memory. */
     .startup . : {
         KEEP(*(.startup));
-    }
+    } > sram
 
     /* Text section */
    .text . : {
         *(.text)
         *(.text.*)
         . = ALIGN(8);
+    } > sram
+
+   /* Data sections */
+   .rodata . : {
+        *(.rodata)
+        *(.rodata.*)
+        . = ALIGN(8);
+    } > sram
+
+   .data . : {
+        *(.data)
+        *(.data.*)
+        . = ALIGN(8);
+    } > sram
+
+   .bss . : {
+        *(.bss)
+        *(.bss.*)
+        *(COMMON)
+        . = ALIGN(8);
+    } > sram
+
+   /* Discard unwanted sections */
+   /DISCARD/ : {
+        *(.rela.*)
+        *(.rel.*)
+        *(.comment)
+        *(.note.*)
+        *(.eh_frame)
+        *(.ARM.*)
     }
-   .remaining . : {
-        *(*)
-    }
+
    _sbe_image_size = . - _sppe_start;
 }

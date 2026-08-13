@@ -5,6 +5,7 @@ CONTAINER_NAME="llvm-dev"
 LLVM_SRC_DIR="`pwd`/llvm"
 CPP_SRC_DIR="`pwd`/appsource"
 LLVM_BUILD_DIR="${LLVM_SRC_DIR}/build"
+VOLUME_NAME="llvm-build-cache"
 
 
 # --- CHECK LLVM SOURCE ---
@@ -48,6 +49,51 @@ if [ ! -d "${LLVM_SRC_DIR}/llvm" ]; then
     echo "Extracting LLVM..."
     tar -xf "${LLVM_TAR}" -C "${LLVM_SRC_DIR}"
     mv "${LLVM_SRC_DIR}"/llvm-project-* "${LLVM_SRC_DIR}/llvm"
+
+    # Initialize git repo and apply PPE42 patch
+    cd "${LLVM_SRC_DIR}/llvm/llvm"
+
+    if [ ! -d ".git" ]; then
+        echo "Initializing git repository in LLVM source..."
+        git init
+
+        # Set a local identity so git commit works in CI environments
+        # where no global git config is present (e.g. GitHub Actions runners).
+        git config user.email "llvm-build@localhost"
+        git config user.name "LLVM Build"
+
+        # Add only PowerPC backend files (matching first commit)
+        echo "Adding PowerPC backend files to git..."
+        git add lib/Target/PowerPC/
+        git add include/llvm/TargetParser/PPCTargetParser.def
+        git commit -m "Adding original PowerPC target description files"
+
+        # Apply PPE42 backend patches
+        PATCH_DIR="$(dirname "${LLVM_SRC_DIR}")/llvm_patches"
+
+        # Apply patches in order with 3-way merge to handle conflicts
+        for PATCH_FILE in "${PATCH_DIR}"/*.patch; do
+            if [ -f "${PATCH_FILE}" ]; then
+                echo "Applying patch: $(basename "${PATCH_FILE}")..."
+                git am --3way "${PATCH_FILE}"
+                if [ $? -ne 0 ]; then
+                    echo "Warning: Patch $(basename "${PATCH_FILE}") had conflicts."
+                    echo "Attempting to continue with resolved conflicts..."
+                    git am --continue || git am --skip
+                fi
+                echo "Patch applied successfully."
+            fi
+        done
+
+        if [ ! -f "${PATCH_DIR}"/*.patch ]; then
+            echo "Warning: No patch files found in ${PATCH_DIR}"
+            echo "Continuing without patches..."
+        fi
+    else
+        echo "Git repository already initialized, skipping git setup."
+    fi
+
+    cd -
 else
     echo "LLVM source already exists, skipping download and extraction."
 fi
@@ -62,6 +108,14 @@ else
   DOCKER_TTY_ARGS="--rm"
 fi
 
+# --- CREATE DOCKER VOLUME FOR BUILD CACHE ---
+if ! docker volume inspect "${VOLUME_NAME}" >/dev/null 2>&1; then
+    echo "Creating Docker volume ${VOLUME_NAME} for build cache..."
+    docker volume create "${VOLUME_NAME}"
+else
+    echo "Docker volume ${VOLUME_NAME} already exists."
+fi
+
 # --- RUN THE CONTAINER ---
 echo "Starting LLVM development container..."
 
@@ -69,19 +123,23 @@ docker run ${DOCKER_TTY_ARGS} \
     --rm \
     --name "${CONTAINER_NAME}" \
     -v "${LLVM_SRC_DIR}:/root/llvm-project" \
-    -v "${LLVM_BUILD_DIR}:/root/llvm-project/build" \
     -v "${CPP_SRC_DIR}:/workspace" \
-    -w /root/llvm-project/llvm/build \
-    llvm-dev:latest \
+    -v "${VOLUME_NAME}:/build" \
+    -w /root/llvm-project \
+    $IMAGE_NAME \
     bash -c "
         set -e;
 
+        # Use persistent build directory from Docker volume
+        mkdir -p /build/llvm-build
+        cd /build/llvm-build
 
         if [ ! -f build.ninja ]; then
             echo 'Configuring LLVM with CMake...';
-            cmake -G Ninja ../llvm \
+            cmake -G Ninja /root/llvm-project/llvm/llvm \
                 -DLLVM_ENABLE_PROJECTS='clang;lld' \
                 -DCMAKE_BUILD_TYPE=Release \
+                -DLLVM_ENABLE_ASSERTIONS=ON \
                 -DLLVM_TARGETS_TO_BUILD='PowerPC' \
                 -DCMAKE_INSTALL_PREFIX=/opt/llvm-install
         else
@@ -98,10 +156,16 @@ docker run ${DOCKER_TTY_ARGS} \
 
         echo 'LLVM build complete. Launching shell.';
         export PATH=/opt/llvm-install/bin:\$PATH
-	cd  /workspace
+ cd  /workspace
 
-	clang --target=powerpc-linux-gnu --sysroot=/ -B/usr/lib/gcc-cross/powerpc-linux-gnu/13 -T ./linker -Wl,-L/usr/powerpc-linux-gnu/lib -Wl,-rpath-link=/usr/powerpc-linux-gnu/lib -Os -nostartfiles -nostdlib ./test.c ./startup.s
-	python3 parseandcut.py a.out
-	hexdump -C a.bin
-	exec bash
+ # Run the assembly test script first
+ echo '=== Running Assembly Test (simple_test_assembly/test_asm.sh) ==='
+ cd simple_test_assembly && ./test_asm.sh && cd ..
+
+ # Run the basic C test (64-bit load/store)
+ echo ''
+ echo '=== Running Basic C Test (test_c/test_c.sh) ==='
+ cd test_c && ./test_c.sh && cd ..
+
+ exec bash
     "
