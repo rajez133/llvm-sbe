@@ -1,5 +1,5 @@
 // PPE42 64-bit OR optimization test
-// Tests optimized (single word) and RLDIMI-compatible (continuous 1s) cases
+// Tests all OR optimization cases: single word, RLDIMI, and both words
 
 int main(void) {
     volatile unsigned long long *addr1 = (volatile unsigned long long *)0x50000;
@@ -24,6 +24,13 @@ int main(void) {
     value1 = *addr1;
     value1 |= 0x00000003FF000000ULL;  // Continuous 1s - can use RLDIMI
     *addr1 = value1;
+
+    // Test Case 4: OR with both words affected (random pattern)
+    // Expected: Lower to 2x 32-bit OR operations (ORI + ORIS)
+    // 0x1234000000005678 = both high (0x12340000) and low (0x00005678) words affected
+    value2 = *addr2;
+    value2 |= 0x1234000000005678ULL;  // Both words - should use 2x 32-bit OR
+    *addr2 = value2;
 
     // Infinite loop
     while (1);
