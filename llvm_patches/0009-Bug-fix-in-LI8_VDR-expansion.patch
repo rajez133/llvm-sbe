@@ -1,0 +1,93 @@
+From 82f5e41dcabc89d201b665c39721fad32eee5c78 Mon Sep 17 00:00:00 2001
+From: Rajees P P <rajerpp1@in.ibm.com>
+Date: Sat, 22 Aug 2026 13:21:53 +0530
+Subject: [PATCH] Bug fix in LI8_VDR expansion
+
+---
+ lib/Target/PowerPC/PPCInstrInfo.cpp | 61 ++++++++++++++++-------------
+ 1 file changed, 34 insertions(+), 27 deletions(-)
+
+diff --git a/lib/Target/PowerPC/PPCInstrInfo.cpp b/lib/Target/PowerPC/PPCInstrInfo.cpp
+index af6c7a7..c2ea038 100644
+--- a/lib/Target/PowerPC/PPCInstrInfo.cpp
++++ b/lib/Target/PowerPC/PPCInstrInfo.cpp
+@@ -3130,42 +3130,49 @@ bool PPCInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
+     return true;
+   }
+   case PPC::LI8_VDR: {
+-    // Expand LI8_VDR pseudo to load 64-bit immediate into VDR register pair
+-    // LI8_VDR rD, imm64 -> LI rD_lo, imm_lo
+-    //                       LIS rD_hi, imm_hi
++    // Expand LI8_VDR pseudo to load a 64-bit immediate into a VDR register pair.
++    //
++    // Each 32-bit word is materialised using the most compact sequence:
++    //
++    //   (a) LI   rX, word[15:0]          -- when word[31:16] == 0 and
++    //                                        word[15] == 0 (no sign-extension
++    //                                        into the upper half)
++    //   (b) LIS  rX, word[31:16]          -- when word[15:0] == 0
++    //       ORI  rX, rX, word[15:0]       -- appended when word[15:0] != 0
++    //
++    // LI sign-extends a 16-bit value to 32 bits, so it is ONLY safe when the
++    // upper 16 bits are zero AND bit 15 of the lower 16 bits is also zero
++    // (otherwise LI would corrupt the upper half with sign-extension).
++
+     Register DestReg = MI.getOperand(0).getReg();
+     int64_t Imm = MI.getOperand(1).getImm();
+ 
+-    // Get the two GPRs that make up the VDR register pair using subregister API
+     const TargetRegisterInfo *TRI = &getRegisterInfo();
+-    Register HiReg = TRI->getSubReg(DestReg, PPC::sub_gpr_hi);  // High word (even register)
+-    Register LoReg = TRI->getSubReg(DestReg, PPC::sub_gpr_lo);  // Low word (odd register)
++    Register HiReg = TRI->getSubReg(DestReg, PPC::sub_gpr_hi);
++    Register LoReg = TRI->getSubReg(DestReg, PPC::sub_gpr_lo);
+ 
+-    // Split the 64-bit immediate into high and low 32-bit parts
+     uint32_t ImmLo = static_cast<uint32_t>(Imm & 0xFFFFFFFF);
+     uint32_t ImmHi = static_cast<uint32_t>((Imm >> 32) & 0xFFFFFFFF);
+ 
+-    // Load low word: LI rD_lo, imm_lo (sign-extended 16-bit)
+-    int16_t ImmLo16 = static_cast<int16_t>(ImmLo & 0xFFFF);
+-    BuildMI(MBB, MI, DL, get(PPC::LI), LoReg).addImm(ImmLo16);
+-
+-    // Load high word: LIS rD_hi, imm_hi (upper 16 bits)
+-    int16_t ImmHi16 = static_cast<int16_t>((ImmHi >> 16) & 0xFFFF);
+-    BuildMI(MBB, MI, DL, get(PPC::LIS), HiReg).addImm(ImmHi16);
+-
+-    // If lower 16 bits of high word are non-zero, add ORI
+-    if ((ImmHi & 0xFFFF) != 0) {
+-      BuildMI(MBB, MI, DL, get(PPC::ORI), HiReg)
+-          .addReg(HiReg)
+-          .addImm(ImmHi & 0xFFFF);
+-    }
++    // Helper: emit the minimal sequence for one 32-bit word into Reg.
++    auto EmitWord = [&](Register Reg, uint32_t Word) {
++      uint32_t Hi16 = (Word >> 16) & 0xFFFF;
++      uint32_t Lo16 = Word & 0xFFFF;
++      if (Hi16 == 0 && (Lo16 & 0x8000) == 0) {
++        // Upper 16 bits are zero and bit 15 is clear: a single LI suffices.
++        BuildMI(MBB, MI, DL, get(PPC::LI), Reg).addImm(Lo16);
++      } else {
++        // General case: LIS to set the upper half (zeroes the lower half),
++        // then ORI to fill in any non-zero lower 16 bits.
++        BuildMI(MBB, MI, DL, get(PPC::LIS), Reg)
++            .addImm(static_cast<int16_t>(Hi16));
++        if (Lo16 != 0)
++          BuildMI(MBB, MI, DL, get(PPC::ORI), Reg).addReg(Reg).addImm(Lo16);
++      }
++    };
+ 
+-    // If upper 16 bits of low word are non-zero, add ORIS
+-    if ((ImmLo >> 16) != 0) {
+-      BuildMI(MBB, MI, DL, get(PPC::ORIS), LoReg)
+-          .addReg(LoReg)
+-          .addImm((ImmLo >> 16) & 0xFFFF);
+-    }
++    EmitWord(HiReg, ImmHi);
++    EmitWord(LoReg, ImmLo);
+ 
+     MI.eraseFromParent();
+     return true;
+-- 
+2.48.1
+
