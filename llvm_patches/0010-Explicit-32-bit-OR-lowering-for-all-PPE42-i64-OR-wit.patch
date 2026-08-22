@@ -1,0 +1,169 @@
+From 340096b5f673b17b77f5bb60f43d2e70e890b13d Mon Sep 17 00:00:00 2001
+From: Rajees P P <rajerpp1@in.ibm.com>
+Date: Sat, 22 Aug 2026 14:46:52 +0530
+Subject: [PATCH] Explicit 32-bit OR lowering for all PPE42 i64
+ OR-with-constant cases
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Replace the accidental OR8_VDR fallback path for both-words constants with
+an explicit DAG combiner that handles all OR-with-immediate shapes:
+
+- Single-word constants (only hi or only lo affected) are already handled
+  via EXTRACT_SUBREG/OR/INSERT_SUBREG, producing a single oris or ori.
+- Both-words non-run-of-ones constants now also take this explicit path,
+  each sub-register ORed independently — no more OR8_VDR(LI8_VDR(imm)).
+- Both-words run-of-ones constants (e.g. 0x00000003FF000000) are left for
+  tryAsSingleRLDIMI() in instruction selection to emit RLDIMI_VDR.
+- Single-word single-bit constants (e.g. 0x8000000000000000) are handled
+  by the combiner as a single oris, which is cheaper than RLDIMI_VDR.
+
+Remove the Pat<(or i64:, imm:), (OR8_VDR ...)> fallback pattern
+from PPCInstrPPEVD.td — it is now dead code. OR8_VDR retains its
+register-register pattern for pure reg-reg 64-bit OR.
+---
+ lib/Target/PowerPC/PPCISelLowering.cpp | 83 ++++++++++++++------------
+ lib/Target/PowerPC/PPCInstrPPEVD.td    | 17 +++---
+ 2 files changed, 54 insertions(+), 46 deletions(-)
+
+diff --git a/lib/Target/PowerPC/PPCISelLowering.cpp b/lib/Target/PowerPC/PPCISelLowering.cpp
+index 2cd6d6a..1631a7b 100644
+--- a/lib/Target/PowerPC/PPCISelLowering.cpp
++++ b/lib/Target/PowerPC/PPCISelLowering.cpp
+@@ -16681,55 +16681,64 @@ SDValue PPCTargetLowering::PerformDAGCombine(SDNode *N,
+   case ISD::ADD:
+     return combineADD(N, DCI);
+   case ISD::OR: {
+-    // PPE42 optimization: Convert 64-bit OR to 32-bit OR when constant
+-    // only affects one 32-bit word of the VDR register pair
++    // PPE42: explicitly lower i64 OR-with-constant into 32-bit sub-word
++    // operations on the VDR register pair.
+     //
+-    // Strategy: Use EXTRACT_SUBREG to get sub-registers, perform 32-bit OR,
+-    // then use INSERT_SUBREG to rebuild. With proper register constraints,
+-    // the extract/insert operations become no-ops (just register aliases).
++    // Cases handled here:
++    //   - only high word affected  → OR the high sub-register, keep low
++    //   - only low word affected   → OR the low sub-register, keep high
++    //   - both words affected, NOT a run-of-ones → OR each sub-register
++    //
++    // IMPORTANT: when the constant spans both 32-bit halves AND is a
++    // run-of-ones (e.g. 0x00000003FF000000), we must leave the ISD::OR node
++    // intact so that tryAsSingleRLDIMI() in instruction selection can pick
++    // RLDIMI_VDR.  Single-word constants (only hi or only lo) are always
++    // handled here — they produce a cheaper oris/ori rather than RLDIMI.
+     if (!Subtarget.isPPE42() || N->getValueType(0) != MVT::i64)
+       break;
+-    
++
+     ConstantSDNode *ConstOp = dyn_cast<ConstantSDNode>(N->getOperand(1));
+     if (!ConstOp)
+       break;
+-    
++
+     uint64_t Imm64 = ConstOp->getZExtValue();
+     uint32_t ImmHi = (Imm64 >> 32) & 0xFFFFFFFF;
+     uint32_t ImmLo = Imm64 & 0xFFFFFFFF;
+-    
+-    // Check if constant only affects one word
+-    if ((ImmHi != 0 && ImmLo != 0) || (ImmHi == 0 && ImmLo == 0))
+-      break;  // Affects both words or neither - let normal path handle it
+-    
++
++    // Nothing to do for a zero constant.
++    if (ImmHi == 0 && ImmLo == 0)
++      break;
++
++    // When the constant spans both halves and forms a run-of-ones, defer to
++    // tryAsSingleRLDIMI() so it can emit a single RLDIMI_VDR instruction.
++    // Single-word constants (ImmHi==0 or ImmLo==0) are always cheaper as
++    // oris/ori, so we handle them here even if they are technically a
++    // single-bit run-of-ones.
++    if (ImmHi != 0 && ImmLo != 0) {
++      unsigned MB, ME;
++      if (isRunOfOnes64(Imm64, MB, ME))
++        break;
++    }
++
+     SDValue N0 = N->getOperand(0);
+-    
+-    // Extract sub-registers from VDR
+-    // These will be assigned to the same physical registers as N0's tuple
+     SDValue HiWord = DAG.getTargetExtractSubreg(PPC::sub_gpr_hi, dl, MVT::i32, N0);
+     SDValue LoWord = DAG.getTargetExtractSubreg(PPC::sub_gpr_lo, dl, MVT::i32, N0);
+-    
+-    if (ImmHi != 0 && ImmLo == 0) {
+-      // Constant only affects high word - do 32-bit OR on high word
+-      SDValue NewHi = DAG.getNode(ISD::OR, dl, MVT::i32, HiWord,
+-                                  DAG.getConstant(ImmHi, dl, MVT::i32));
+-      // Rebuild VDR using INSERT_SUBREG
+-      // Start with original VDR, insert modified high word
+-      SDValue Result = DAG.getTargetInsertSubreg(PPC::sub_gpr_hi, dl, MVT::i64, N0, NewHi);
+-      return Result;
+-    }
+-    
+-    if (ImmLo != 0 && ImmHi == 0) {
+-      // Constant only affects low word - do 32-bit OR on low word
+-      SDValue NewLo = DAG.getNode(ISD::OR, dl, MVT::i32, LoWord,
+-                                  DAG.getConstant(ImmLo, dl, MVT::i32));
+-      // Rebuild VDR using INSERT_SUBREG
+-      // Start with original VDR, insert modified low word
+-      SDValue Result = DAG.getTargetInsertSubreg(PPC::sub_gpr_lo, dl, MVT::i64, N0, NewLo);
+-      return Result;
+-    }
+-    
+-    break;
++
++    // OR only the half-words where the constant is non-zero; leave the other
++    // half-word unchanged (no instruction emitted for the zero half).
++    SDValue NewHi = (ImmHi != 0)
++        ? DAG.getNode(ISD::OR, dl, MVT::i32, HiWord,
++                      DAG.getConstant(ImmHi, dl, MVT::i32))
++        : HiWord;
++    SDValue NewLo = (ImmLo != 0)
++        ? DAG.getNode(ISD::OR, dl, MVT::i32, LoWord,
++                      DAG.getConstant(ImmLo, dl, MVT::i32))
++        : LoWord;
++
++    // Reassemble the VDR pair from the two (possibly updated) sub-registers.
++    SDValue Result = DAG.getTargetInsertSubreg(PPC::sub_gpr_hi, dl, MVT::i64, N0, NewHi);
++    Result = DAG.getTargetInsertSubreg(PPC::sub_gpr_lo, dl, MVT::i64, Result, NewLo);
++    return Result;
+   }
+   case ISD::AND: {
+     // We don't want (and (zext (shift...)), C) if C fits in the width of the
+diff --git a/lib/Target/PowerPC/PPCInstrPPEVD.td b/lib/Target/PowerPC/PPCInstrPPEVD.td
+index d6377bc..47350fe 100644
+--- a/lib/Target/PowerPC/PPCInstrPPEVD.td
++++ b/lib/Target/PowerPC/PPCInstrPPEVD.td
+@@ -63,18 +63,17 @@ def LI8_VDR : PPCPostRAExpPseudo<(outs vdrc:$rD), (ins s16imm64:$imm),
+                                  "#LI8_VDR", []>;
+ }
+ 
+-// Pseudo-instruction for 64-bit OR operation using VDR register pairs
+-// This will be expanded post-RA into two 32-bit OR instructions (one for each GPR)
++// Pseudo-instruction for 64-bit OR operation using VDR register pairs.
++// Expanded post-RA into two 32-bit OR instructions (one per GPR in the pair).
+ // Format: OR8_VDR vdrc_out, vdrc_in1, vdrc_in2
+-// Pattern: Matches i64 OR operations for PPE42
++//
++// Only the register-register pattern is kept here.  OR-with-immediate is
++// handled exclusively in the DAG combiner (PPCISelLowering.cpp combineISD_OR)
++// so that the run-of-ones → RLDIMI_VDR path in tryAsSingleRLDIMI() is
++// reached first during instruction selection.  The Pat fallback that used to
++// match (or i64 reg, imm) → OR8_VDR(reg, LI8_VDR(imm)) has been removed.
+ let Predicates = [IsPPE42] in {
+ def OR8_VDR : PPCPostRAExpPseudo<(outs vdrc:$rD), (ins vdrc:$rA, vdrc:$rB),
+                                  "#OR8_VDR",
+                                  [(set i64:$rD, (or i64:$rA, i64:$rB))]>;
+-
+-// Pattern for OR with immediate - fallback when single-word optimization doesn't apply
+-// This pattern has lower priority (comes after DAG combining optimizations)
+-// Loads immediate into VDR then performs OR
+-def : Pat<(or i64:$rA, imm:$imm),
+-          (OR8_VDR vdrc:$rA, (LI8_VDR imm:$imm))>;
+ }
+-- 
+2.48.1
+
