@@ -2,8 +2,8 @@
 // Tests all OR optimization cases: single word, RLDIMI, and both words
 
 int main(void) {
-    volatile unsigned long long *addr1 = (volatile unsigned long long *)0x50000;
-    volatile unsigned long long *addr2 = (volatile unsigned long long *)0x50008;
+    volatile unsigned long long *addr1 = (volatile unsigned long long *)0x50008;
+    volatile unsigned long long *addr2 = (volatile unsigned long long *)0x50009;
     unsigned long long value1, value2;
 
     // Test Case 1: OR with constant affecting only HIGH word
