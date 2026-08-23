@@ -167,5 +167,10 @@ docker run ${DOCKER_TTY_ARGS} \
  echo '=== Running Basic C Test (test_c/test_c.sh) ==='
  cd test_c && ./test_c.sh && cd ..
 
+ # Run the register pressure test (P1-C prerequisite)
+ echo ''
+ echo '=== Running Register Pressure Test (test_c_register_pressure/test_c_register_pressure.sh) ==='
+ cd test_c_register_pressure && bash test_c_register_pressure.sh && cd ..
+
  exec bash
     "
