@@ -51,8 +51,8 @@ allocation order for `GPRC` limited to:
 
 ---
 
-### P1-D · Replace `G3Itineraries` with `NoItineraries` in the PPE42 processor definition
-**Status:** Wrong — `G3Itineraries` is currently used
+### P1-D · Replace `G3Itineraries` with `NoItineraries` in the PPE42 processor definition ✅ Done
+**Status:** Fixed in patch 0013
 **Risk:** Medium — `G3Itineraries` describes a G3 (603) pipeline with a dedicated FPU
 unit (`G3_FPU1`), two integer units (`G3_IU1`, `G3_IU2`), and FP instruction latencies.
 None of these units exist on PPE42. The scheduler is fed a reservation table built for
@@ -73,8 +73,7 @@ faster to compile. Also remove `hasNoSchedulingInfo = 1` from `LVD`/`STVD` in
 `PPCInstrPPEVD.td` since it is no longer needed once `NoItineraries` is set.
 **Note:** Do not implement a full `PPE42Model` at this step — that is P2-H. This is
 only removing the actively wrong G3 table.
-**Patch:** 0022
-**Do not start until:** Current register spill work (active) is merged.
+**Patch:** 0013
 
 ---
 
@@ -210,7 +209,7 @@ Remove CR logical instructions from the PPE42 instruction set.
 ---
 
 ### P2-I · PPE42-specific instruction scheduler
-**Status:** Missing (blocked on P1-D)
+**Status:** Missing
 **ISA:** In-order pipeline, ALU=1 cycle, Branch=2 cycles, Load/Store=2+memory cycles
 **Action:** Define a `PPE42Model` scheduling model. Add latency annotations to
 LVD/STVD and the ALU instructions.
@@ -390,7 +389,7 @@ Now that P1-B is done and the both-words OR path is explicit, add a comment in
 | P1-A   | Fix `LI8_VDR` 64-bit immediate expansion           | ✅ Done     | 0009   |
 | P1-B   | Explicit 64-bit OR lowering (remove OR8_VDR)       | ✅ Done     | 0010   |
 | P1-C   | Restrict GPR class to 16 PPE42 registers           | ✅ Done     | 0011+0012 |
-| P1-D   | Replace `G3Itineraries` with `NoItineraries`       | 🟠 Medium   | 0022   |
+| P1-D   | Replace `G3Itineraries` with `NoItineraries`       | ✅ Done     | 0013   |
 | P1-E   | Fix PPCAsmParser -- `rN` names rejected without `%`| 🔴 High     | 0021   |
 | P2-A   | 64-bit shift/rotate (`slvd`, `srvd`, `rldicl`)     | 🟡 Medium   | 0013   |
 | P2-B   | Verify all `i64` arithmetic ops expand correctly   | 🔴 High     | 0023   |
@@ -400,7 +399,7 @@ Now that P1-B is done and the both-words OR path is explicit, add a comment in
 | P2-F   | Fused compare-branch (opcode 1)                    | 🟡 Medium   | 0012   |
 | P2-G   | Restrict CR to CR0 only                            | 🟡 Medium   | 0014   |
 | P2-H   | Add `dcbq` cache query instruction                 | 🟢 Low      | 0015   |
-| P2-I   | PPE42 scheduling model (blocked on P1-D)           | 🟢 Low      | 0016   |
+| P2-I   | PPE42 scheduling model                             | 🟢 Low      | 0016   |
 | OPT-A  | `lis+or` → `oris` (high-word constant, 1 insn)     | 🟠 Medium   | 0018   |
 | OPT-B  | `lis -1 + ori` → `li -1` in LI8_VDR expansion     | ✅ Done     | 0009   |
 | OPT-C  | Remove redundant `oris` after `li -1` (auto)       | ✅ Done     | 0009   |

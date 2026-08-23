@@ -1,0 +1,60 @@
+From 888e341ca203ea6c5948d7893051aaf1547d2545 Mon Sep 17 00:00:00 2001
+From: Rajees P P <rajerpp1@in.ibm.com>
+Date: Sun, 23 Aug 2026 23:07:37 +0530
+Subject: [PATCH] PPE42: Switch from G3Itineraries to NoItineraries
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+PPC.td:
+  Replace G3Itineraries with NoItineraries in the ppe42 processor
+  definition. G3Itineraries models a G3 (603) pipeline with a dedicated
+  FPU unit (G3_FPU1) and dual integer units — none of which exist on
+  PPE42. NoItineraries is the correct declaration for a processor with
+  no reservation table: it bypasses the HazardRecognizer entirely.
+
+PPCInstrPPEVD.td:
+  Keep hasNoSchedulingInfo = 1 on LVD, STVD and RLDIMI_VDR. This flag
+  is required because P9Model and P10Model are CompleteModel subtargets
+  that require every instruction to have a Sched<[]> entry or be
+  explicitly excluded. hasNoSchedulingInfo suppresses that check for
+  PPE42-only instructions that will never run on those pipelines.
+  Add a comment clarifying this is distinct from NoItineraries on the
+  processor def.
+---
+ lib/Target/PowerPC/PPC.td           | 2 +-
+ lib/Target/PowerPC/PPCInstrPPEVD.td | 5 +++++
+ 2 files changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/lib/Target/PowerPC/PPC.td b/lib/Target/PowerPC/PPC.td
+index 13305fc..8eb86b8 100644
+--- a/lib/Target/PowerPC/PPC.td
++++ b/lib/Target/PowerPC/PPC.td
+@@ -589,7 +589,7 @@ def : ProcessorModel<"450", PPC440Model, [Directive440, FeatureISEL,
+                                           FeatureFRES, FeatureFRSQRTE,
+                                           FeatureICBT, FeatureBookE,
+                                           FeatureMSYNC, FeatureMFTB]>;
+-def : Processor<"ppe42", G3Itineraries, [DirectivePPE42, FeatureMFTB,
++def : Processor<"ppe42", NoItineraries, [DirectivePPE42, FeatureMFTB,
+                                          FeaturePPE42]>;
+ def : Processor<"601", G3Itineraries, [Directive601, FeatureFPU]>;
+ def : Processor<"602", G3Itineraries, [Directive602, FeatureFPU,
+diff --git a/lib/Target/PowerPC/PPCInstrPPEVD.td b/lib/Target/PowerPC/PPCInstrPPEVD.td
+index 47350fe..763e903 100644
+--- a/lib/Target/PowerPC/PPCInstrPPEVD.td
++++ b/lib/Target/PowerPC/PPCInstrPPEVD.td
+@@ -23,6 +23,11 @@
+ def LVD : DForm_1<5, (outs vdrc:$RST), (ins (memri $D, $RA):$src),
+                   "lvd $RST, $src", IIC_LdStLoad,
+                   [(set i64:$RST, (load iaddr:$src))]> {
++  // hasNoSchedulingInfo suppresses "lacks information" errors from complete
++  // upstream models (P9Model, P10Model, etc.) that have no entry for PPE42
++  // instructions.  It is separate from NoItineraries on the processor def —
++  // NoItineraries means "no reservation table for ppe42"; this flag means
++  // "don't require a Sched<[]> entry in every other model's complete table".
+   let hasNoSchedulingInfo = 1;
+   let DecoderNamespace = "PPE42";
+ }
+-- 
+2.48.1
+
