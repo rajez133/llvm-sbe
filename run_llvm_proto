@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -e
 
+# Usage: ./run_llvm_proto [-i]
+#   -i   Drop into an interactive shell after tests complete (default: exit)
+INTERACTIVE=0
+while getopts "i" opt; do
+  case $opt in
+    i) INTERACTIVE=1 ;;
+  esac
+done
+
 CONTAINER_NAME="llvm-dev"
 LLVM_SRC_DIR="`pwd`/llvm"
 CPP_SRC_DIR="`pwd`/appsource"
@@ -101,11 +110,11 @@ fi
 # --- CREATE BUILD DIRECTORY IF MISSING ---
 mkdir -p "${LLVM_BUILD_DIR}"
 
-# Detect TTY availability
-if [ -t 1 ]; then
+# Allocate a TTY only when running interactively
+if [ "${INTERACTIVE}" -eq 1 ]; then
   DOCKER_TTY_ARGS="-it"
 else
-  DOCKER_TTY_ARGS="--rm"
+  DOCKER_TTY_ARGS=""
 fi
 
 # --- CREATE DOCKER VOLUME FOR BUILD CACHE ---
@@ -154,23 +163,32 @@ docker run ${DOCKER_TTY_ARGS} \
             ninja install;
         fi
 
-        echo 'LLVM build complete. Launching shell.';
+        echo 'LLVM build complete.';
         export PATH=/opt/llvm-install/bin:\$PATH
- cd  /workspace
+        cd /workspace
 
- # Run the assembly test script first
- echo '=== Running Assembly Test (simple_test_assembly/test_asm.sh) ==='
- cd simple_test_assembly && ./test_asm.sh && cd ..
+        echo '=== Running Assembly Test (simple_test_assembly/test_asm.sh) ==='
+        cd simple_test_assembly && ./test_asm.sh && cd ..
 
- # Run the basic C test (64-bit load/store)
- echo ''
- echo '=== Running Basic C Test (test_c/test_c.sh) ==='
- cd test_c && ./test_c.sh && cd ..
+        # Build all PPE42 applications and run native tests.
+        echo ''
+        echo '=== Building PPE42 applications ==='
+        meson setup output/meson-apps --cross-file cross/ppe42.ini
+        meson test -C output/meson-apps --print-errorlogs
+        meson compile -C output/meson-apps
 
- # Run the register pressure test (P1-C prerequisite)
- echo ''
- echo '=== Running Register Pressure Test (test_c_register_pressure/test_c_register_pressure.sh) ==='
- cd test_c_register_pressure && bash test_c_register_pressure.sh && cd ..
+        echo ''
+        echo '=== Running Basic C Test (test_c/test_c.sh) ==='
+        cd test_c && ./test_c.sh && cd ..
 
- exec bash
+        echo ''
+        echo '=== Running Register Pressure Test (test_c_register_pressure/test_c_register_pressure.sh) ==='
+        cd test_c_register_pressure && bash test_c_register_pressure.sh && cd ..
+
+        echo ''
+        echo '=== ALL TESTS DONE ==='
+
+        if [ ${INTERACTIVE} -eq 1 ]; then
+            exec bash
+        fi
     "
