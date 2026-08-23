@@ -1,0 +1,104 @@
+From 892b6fd09af46682da04f6ca6ef1b8ec4778f348 Mon Sep 17 00:00:00 2001
+From: Rajees P P <rajerpp1@in.ibm.com>
+Date: Sun, 23 Aug 2026 23:18:01 +0530
+Subject: [PATCH] PPE42: Remove hasNoSchedulingInfo via UnsupportedFeatures in
+ P9/P10 models
+
+PPCScheduleP9.td / PPCScheduleP10.td:
+  Add IsPPE42 to UnsupportedFeatures in P9Model and P10Model. This tells
+  the CompleteModel checker to skip instructions whose Predicates include
+  IsPPE42, so no Sched<[]> entry is needed for LVD, STVD, or RLDIMI_VDR
+  in those models.
+
+PPCInstrPPEVD.td:
+  Wrap LVD and STVD in a 'let Predicates = [IsPPE42] in' block. Without
+  this predicate the UnsupportedFeatures mechanism cannot identify them
+  as PPE42-only and the CompleteModel check still fires. RLDIMI_VDR
+  already carried IsPPE42 via its enclosing block.
+  Remove hasNoSchedulingInfo = 1 from LVD, STVD and RLDIMI_VDR now that
+  the CompleteModel check is correctly suppressed by UnsupportedFeatures.
+---
+ lib/Target/PowerPC/PPCInstrPPEVD.td  | 14 ++++++--------
+ lib/Target/PowerPC/PPCScheduleP10.td |  3 ++-
+ lib/Target/PowerPC/PPCScheduleP9.td  |  3 ++-
+ 3 files changed, 10 insertions(+), 10 deletions(-)
+
+diff --git a/lib/Target/PowerPC/PPCInstrPPEVD.td b/lib/Target/PowerPC/PPCInstrPPEVD.td
+index 763e903..e19e240 100644
+--- a/lib/Target/PowerPC/PPCInstrPPEVD.td
++++ b/lib/Target/PowerPC/PPCInstrPPEVD.td
+@@ -16,6 +16,11 @@
+ // PPE42 VD Instruction Definitions
+ //===----------------------------------------------------------------------===//
+ 
++// LVD/STVD are PPE42-only instructions.  Predicates = [IsPPE42] is required
++// so that P9Model/P10Model UnsupportedFeatures = [IsPPE42] correctly excludes
++// them from the CompleteModel scheduling check.
++let Predicates = [IsPPE42] in {
++
+ // LVD - Load Virtual Doubleword
+ // Opcode: 5
+ // Format: D-Form
+@@ -23,12 +28,6 @@
+ def LVD : DForm_1<5, (outs vdrc:$RST), (ins (memri $D, $RA):$src),
+                   "lvd $RST, $src", IIC_LdStLoad,
+                   [(set i64:$RST, (load iaddr:$src))]> {
+-  // hasNoSchedulingInfo suppresses "lacks information" errors from complete
+-  // upstream models (P9Model, P10Model, etc.) that have no entry for PPE42
+-  // instructions.  It is separate from NoItineraries on the processor def —
+-  // NoItineraries means "no reservation table for ppe42"; this flag means
+-  // "don't require a Sched<[]> entry in every other model's complete table".
+-  let hasNoSchedulingInfo = 1;
+   let DecoderNamespace = "PPE42";
+ }
+ 
+@@ -39,9 +38,9 @@ def LVD : DForm_1<5, (outs vdrc:$RST), (ins (memri $D, $RA):$src),
+ def STVD : DForm_1<6, (outs), (ins vdrc:$RST, (memri $D, $RA):$dst),
+                    "stvd $RST, $dst", IIC_LdStStore,
+                    [(store i64:$RST, iaddr:$dst)]> {
+-  let hasNoSchedulingInfo = 1;
+   let DecoderNamespace = "PPE42";
+ }
++} // Predicates = [IsPPE42]
+ 
+ // PPE42 64-bit rotate and insert using VDR registers
+ // This is the PPE42 variant of RLDIMI that uses VDR register pairs
+@@ -55,7 +54,6 @@ def RLDIMI_VDR : MDForm_1<30, 3, (outs vdrc:$RA),
+                           []>,
+                           RegConstraint<"$RTi = $RA">,
+                           NoEncode<"$RTi"> {
+-  let hasNoSchedulingInfo = 1;
+   let DecoderNamespace = "PPE42";
+ }
+ }
+diff --git a/lib/Target/PowerPC/PPCScheduleP10.td b/lib/Target/PowerPC/PPCScheduleP10.td
+index f922f8a..10f115e 100644
+--- a/lib/Target/PowerPC/PPCScheduleP10.td
++++ b/lib/Target/PowerPC/PPCScheduleP10.td
+@@ -30,7 +30,8 @@ def P10Model : SchedMachineModel {
+   let CompleteModel = 1;
+ 
+   // Power 10 does not support instructions from SPE, Book E and HTM.
+-  let UnsupportedFeatures = [HasSPE, IsE500, IsBookE, IsISAFuture, HasHTM];
++  let UnsupportedFeatures = [HasSPE, IsE500, IsBookE, IsISAFuture, HasHTM,
++                             IsPPE42];
+ }
+ 
+ let SchedModel = P10Model in {
+diff --git a/lib/Target/PowerPC/PPCScheduleP9.td b/lib/Target/PowerPC/PPCScheduleP9.td
+index 36befce..3c254ca 100644
+--- a/lib/Target/PowerPC/PPCScheduleP9.td
++++ b/lib/Target/PowerPC/PPCScheduleP9.td
+@@ -43,7 +43,8 @@ def P9Model : SchedMachineModel {
+   // instructions introduced after ISA 3.0.
+   let UnsupportedFeatures = [HasSPE, PrefixInstrs, MMA,
+                              PairedVectorMemops, IsBookE,
+-                             PCRelativeMemops, IsISA3_1, IsISAFuture];
++                             PCRelativeMemops, IsISA3_1, IsISAFuture,
++                             IsPPE42];
+ }
+ 
+ let SchedModel = P9Model in {
+-- 
+2.48.1
+
