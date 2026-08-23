@@ -1,0 +1,188 @@
+From ba18c876b76dc274e4ab920cff5c17912d7a84c1 Mon Sep 17 00:00:00 2001
+From: Rajees P P <rajerpp1@in.ibm.com>
+Date: Sun, 23 Aug 2026 22:33:54 +0530
+Subject: [PATCH 12/12] PPE42: Add VDRC spill/reload support using LVD/STVD
+
+Three changes to enable the register allocator to spill and reload
+VDR register pairs when register pressure is exceeded:
+
+PPCInstrInfo.h:
+  - Add SOK_VDRSpill enum value after SOK_PairedG8Spill.
+  - Extend all five Load/StoreOpcodes macro tables (Pwr8, Pwr9, Pwr10,
+    Future, and the G3/SPE row) with a trailing entry for SOK_VDRSpill.
+    PPE42 uses the Pwr8 row (getSpillTarget()==0); LVD is the load opcode
+    and STVD is the store opcode.  All other rows get NoInstr since VDRC
+    is not present on those subtargets.
+
+PPCInstrInfo.cpp:
+  - Add VDRC branch in getSpillIndex(): maps PPC::VDRCRegClass to
+    SOK_VDRSpill.
+
+PPCRegisterInfo.cpp:
+  - Add LVD/STVD self-entries in ImmToIdxMap so eliminateFrameIndex()
+    can resolve the D-form offset for LVD/STVD spill slots.  Both map
+    to themselves as an interim: the X-form conversion path will assert
+    if a frame exceeds 32 KB, making lvdx/stvdx (P2-C) mandatory at
+    that point.
+  - Reserve R2, R13, R11, R12, R14-R27 when isPPE42() to prevent the
+    allocator from ever assigning non-existent PPE42 hardware registers.
+---
+ lib/Target/PowerPC/PPCInstrInfo.cpp    |  5 +++++
+ lib/Target/PowerPC/PPCInstrInfo.h      | 25 +++++++++++++++++--------
+ lib/Target/PowerPC/PPCRegisterInfo.cpp | 25 +++++++++++++++++++++++++
+ 3 files changed, 47 insertions(+), 8 deletions(-)
+
+diff --git a/lib/Target/PowerPC/PPCInstrInfo.cpp b/lib/Target/PowerPC/PPCInstrInfo.cpp
+index c2ea038..0186eec 100644
+--- a/lib/Target/PowerPC/PPCInstrInfo.cpp
++++ b/lib/Target/PowerPC/PPCInstrInfo.cpp
+@@ -1929,6 +1929,11 @@ unsigned PPCInstrInfo::getSpillIndex(const TargetRegisterClass *RC) const {
+     OpcodeIndex = SOK_DMRpSpill;
+   } else if (PPC::DMRRCRegClass.hasSubClassEq(RC)) {
+     OpcodeIndex = SOK_DMRSpill;
++  } else if (PPC::VDRCRegClass.hasSubClassEq(RC)) {
++    // PPE42 VDR register pair: spill/reload using STVD/LVD (single 64-bit
++    // D-form store/load).  Only valid when targeting PPE42 (getSpillTarget()==0
++    // — Pwr8 row), which is the only subtarget that defines VDRC.
++    OpcodeIndex = SOK_VDRSpill;
+   } else {
+     llvm_unreachable("Unknown regclass!");
+   }
+diff --git a/lib/Target/PowerPC/PPCInstrInfo.h b/lib/Target/PowerPC/PPCInstrInfo.h
+index 7931a9e..7956140 100644
+--- a/lib/Target/PowerPC/PPCInstrInfo.h
++++ b/lib/Target/PowerPC/PPCInstrInfo.h
+@@ -85,6 +85,7 @@ enum SpillOpcodeKey {
+   SOK_DMRSpill,
+   SOK_SPESpill,
+   SOK_PairedG8Spill,
++  SOK_VDRSpill,       // PPE42 Virtual Doubleword Register (LVD/STVD)
+   SOK_LastOpcodeSpill // This must be last on the enum.
+ };
+ 
+@@ -122,7 +123,8 @@ enum PPCMachineCombinerPattern : unsigned {
+    NoInstr,                                                                    \
+    NoInstr,                                                                    \
+    PPC::EVLDD,                                                                 \
+-   PPC::RESTORE_QUADWORD}
++   PPC::RESTORE_QUADWORD,                                                      \
++   PPC::LVD}
+ 
+ #define Pwr9LoadOpcodes                                                        \
+   {PPC::LWZ,                                                                   \
+@@ -143,7 +145,8 @@ enum PPCMachineCombinerPattern : unsigned {
+    NoInstr,                                                                    \
+    NoInstr,                                                                    \
+    NoInstr,                                                                    \
+-   PPC::RESTORE_QUADWORD}
++   PPC::RESTORE_QUADWORD,                                                      \
++   NoInstr}
+ 
+ #define Pwr10LoadOpcodes                                                       \
+   {PPC::LWZ,                                                                   \
+@@ -164,7 +167,8 @@ enum PPCMachineCombinerPattern : unsigned {
+    NoInstr,                                                                    \
+    NoInstr,                                                                    \
+    NoInstr,                                                                    \
+-   PPC::RESTORE_QUADWORD}
++   PPC::RESTORE_QUADWORD,                                                      \
++   NoInstr}
+ 
+ #define FutureLoadOpcodes                                                      \
+   {PPC::LWZ,                                                                   \
+@@ -185,7 +189,8 @@ enum PPCMachineCombinerPattern : unsigned {
+    PPC::RESTORE_DMRP,                                                          \
+    PPC::RESTORE_DMR,                                                           \
+    NoInstr,                                                                    \
+-   PPC::RESTORE_QUADWORD}
++   PPC::RESTORE_QUADWORD,                                                      \
++   NoInstr}
+ 
+ #define Pwr8StoreOpcodes                                                       \
+   {PPC::STW,                                                                   \
+@@ -206,7 +211,8 @@ enum PPCMachineCombinerPattern : unsigned {
+    NoInstr,                                                                    \
+    NoInstr,                                                                    \
+    PPC::EVSTDD,                                                                \
+-   PPC::SPILL_QUADWORD}
++   PPC::SPILL_QUADWORD,                                                        \
++   PPC::STVD}
+ 
+ #define Pwr9StoreOpcodes                                                       \
+   {PPC::STW,                                                                   \
+@@ -227,7 +233,8 @@ enum PPCMachineCombinerPattern : unsigned {
+    NoInstr,                                                                    \
+    NoInstr,                                                                    \
+    NoInstr,                                                                    \
+-   PPC::SPILL_QUADWORD}
++   PPC::SPILL_QUADWORD,                                                        \
++   NoInstr}
+ 
+ #define Pwr10StoreOpcodes                                                      \
+   {PPC::STW,                                                                   \
+@@ -248,7 +255,8 @@ enum PPCMachineCombinerPattern : unsigned {
+    NoInstr,                                                                    \
+    NoInstr,                                                                    \
+    NoInstr,                                                                    \
+-   PPC::SPILL_QUADWORD}
++   PPC::SPILL_QUADWORD,                                                        \
++   NoInstr}
+ 
+ #define FutureStoreOpcodes                                                     \
+   {PPC::STW,                                                                   \
+@@ -269,7 +277,8 @@ enum PPCMachineCombinerPattern : unsigned {
+    PPC::SPILL_DMRP,                                                            \
+    PPC::SPILL_DMR,                                                             \
+    NoInstr,                                                                    \
+-   PPC::SPILL_QUADWORD}
++   PPC::SPILL_QUADWORD,                                                        \
++   NoInstr}
+ 
+ // Initialize arrays for load and store spill opcodes on supported subtargets.
+ #define StoreOpcodesForSpill                                                   \
+diff --git a/lib/Target/PowerPC/PPCRegisterInfo.cpp b/lib/Target/PowerPC/PPCRegisterInfo.cpp
+index f123040..6470826 100644
+--- a/lib/Target/PowerPC/PPCRegisterInfo.cpp
++++ b/lib/Target/PowerPC/PPCRegisterInfo.cpp
+@@ -137,6 +137,15 @@ PPCRegisterInfo::PPCRegisterInfo(const PPCTargetMachine &TM)
+   ImmToIdxMap[PPC::SPESTW] = PPC::SPESTWX;
+   ImmToIdxMap[PPC::SPELWZ] = PPC::SPELWZX;
+ 
++  // PPE42 VDR (D-form LVD/STVD).
++  // Self-mapped as interim: enables the D-form immediate fast-path in
++  // eliminateFrameIndex() for normal frames (offset fits in 16 bits).
++  // If a frame ever exceeds 32 KB the X-form conversion path will fire,
++  // assert on the missing X-form opcode, and make P2-A (lvdx/stvdx)
++  // mandatory.  Change to LVD→LVDX / STVD→STVDX once P2-A lands.
++  ImmToIdxMap[PPC::LVD]  = PPC::LVD;
++  ImmToIdxMap[PPC::STVD] = PPC::STVD;
++
+   // Power10
+   ImmToIdxMap[PPC::PLBZ]   = PPC::LBZX; ImmToIdxMap[PPC::PLBZ8]   = PPC::LBZX8;
+   ImmToIdxMap[PPC::PLHZ]   = PPC::LHZX; ImmToIdxMap[PPC::PLHZ8]   = PPC::LHZX8;
+@@ -394,6 +403,22 @@ BitVector PPCRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
+       markSuperRegs(Reserved, PPC::R13); // Small Data Area pointer register.
+   }
+ 
++  // PPE42 EABI: R2 is the Small Data Area 2 (SDA2) pointer and R13 is the
++  // Small Data Area (SDA) pointer — neither may be modified by compiled code.
++  // Additionally, R11, R12 and R14–R27 are not implemented in PPE42 hardware;
++  // reserve them unconditionally so the allocator never assigns them.
++  if (Subtarget.isPPE42()) {
++    markSuperRegs(Reserved, PPC::R2);  // SDA2 pointer — must not be modified
++    markSuperRegs(Reserved, PPC::R13); // SDA pointer  — must not be modified
++    // Non-existent hardware registers on PPE42
++    for (MCPhysReg R : {PPC::R11, PPC::R12,
++                        PPC::R14, PPC::R15, PPC::R16, PPC::R17,
++                        PPC::R18, PPC::R19, PPC::R20, PPC::R21,
++                        PPC::R22, PPC::R23, PPC::R24, PPC::R25,
++                        PPC::R26, PPC::R27})
++      markSuperRegs(Reserved, R);
++  }
++
+   // On PPC64, r13 is the thread pointer. Never allocate this register.
+   if (TM.isPPC64())
+     markSuperRegs(Reserved, PPC::R13);
+-- 
+2.48.1
+
