@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -e
 
+# Usage: ./run_llvm_proto [-i]
+#   -i   Drop into an interactive shell after tests complete (default: exit)
+INTERACTIVE=0
+while getopts "i" opt; do
+  case $opt in
+    i) INTERACTIVE=1 ;;
+  esac
+done
+
 CONTAINER_NAME="llvm-dev"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 LLVM_SRC_DIR="${SCRIPT_DIR}/llvm"
@@ -102,11 +111,11 @@ fi
 # --- CREATE BUILD DIRECTORY IF MISSING ---
 mkdir -p "${LLVM_BUILD_DIR}"
 
-# Detect TTY availability
-if [ -t 1 ]; then
+# Allocate a TTY only when running interactively
+if [ "${INTERACTIVE}" -eq 1 ]; then
   DOCKER_TTY_ARGS="-it"
 else
-  DOCKER_TTY_ARGS="--rm"
+  DOCKER_TTY_ARGS=""
 fi
 
 # --- CREATE DOCKER VOLUME FOR BUILD CACHE ---
@@ -165,30 +174,32 @@ docker run ${DOCKER_TTY_ARGS} \
             ninja install;
         fi
 
-        echo 'LLVM build complete. Launching shell.';
+        echo 'LLVM build complete.';
         export PATH=/opt/llvm-install/bin:\$PATH
- cd  /workspace
+        cd /workspace
 
- # Run the assembly test script first
- echo '=== Running Assembly Test (simple_test_assembly/test_asm.sh) ==='
- cd simple_test_assembly && ./test_asm.sh && cd ..
+        echo '=== Running Assembly Test (simple_test_assembly/test_asm.sh) ==='
+        cd simple_test_assembly && ./test_asm.sh && cd ..
 
- # Build the reusable runtime and hello formatting smoke test.
- echo ''
- echo '=== Building PPE42 application framework (hello) ==='
- meson setup output/meson-hello --cross-file cross/ppe42.ini -Dapp=hello
- meson test -C output/meson-hello --print-errorlogs
- meson compile -C output/meson-hello
+        # Build the reusable runtime and hello formatting smoke test.
+        echo ''
+        echo '=== Building PPE42 application framework (hello) ==='
+        meson setup output/meson-hello --cross-file cross/ppe42.ini -Dapp=hello
+        meson test -C output/meson-hello --print-errorlogs
+        meson compile -C output/meson-hello
 
- # Run the basic C test (64-bit load/store)
- echo ''
- echo '=== Running Basic C Test (test_c/test_c.sh) ==='
- cd test_c && ./test_c.sh && cd ..
+        echo ''
+        echo '=== Running Basic C Test (test_c/test_c.sh) ==='
+        cd test_c && ./test_c.sh && cd ..
 
- # Run the register pressure test (P1-C prerequisite)
- echo ''
- echo '=== Running Register Pressure Test (test_c_register_pressure/test_c_register_pressure.sh) ==='
- cd test_c_register_pressure && bash test_c_register_pressure.sh && cd ..
+        echo ''
+        echo '=== Running Register Pressure Test (test_c_register_pressure/test_c_register_pressure.sh) ==='
+        cd test_c_register_pressure && bash test_c_register_pressure.sh && cd ..
 
- exec bash
+        echo ''
+        echo '=== ALL TESTS DONE ==='
+
+        if [ ${INTERACTIVE} -eq 1 ]; then
+            exec bash
+        fi
     "
