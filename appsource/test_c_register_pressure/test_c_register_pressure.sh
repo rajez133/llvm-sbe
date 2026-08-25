@@ -3,12 +3,6 @@
 # Test script for PPE42 register pressure test (P1-D prerequisite)
 # Compiles a function with 8 simultaneous live 64-bit VDR values to force
 # the allocator into R11/R12, which do not exist on PPE42 hardware.
-#
-# NOTE (P1-C workaround — PPCAsmParser bug):
-#   llvm-mc rejects syntactically valid PPC assembly produced by llc when
-#   -mcpu=ppe42 is used (register names without '%' prefix are mis-parsed).
-#   Workaround: compile directly from LLVM IR to object with llc -filetype=obj,
-#   the same approach used in test_c/test_c.sh.  See TODO_PPE42_BACKEND.md P1-C.
 
 set -e
 
@@ -43,11 +37,9 @@ ${OPT} -O2 -S ${OUTPUT_DIR}/test.ll -o ${OUTPUT_DIR}/test-opt.ll
 echo "  Generated: ${OUTPUT_DIR}/test-opt.ll"
 
 # Step 3: Generate assembly + capture full pass dump
-# NOTE: Previously crashed before the spill opcode was registered (SOK_VDRSpill).
-#       Now succeeds but may emit stvd/lvd with wrong operand order — see Bug 1
-#       description in TODO_PPE42_BACKEND.md (ImmToIdxMap missing LVD/STVD).
 echo "Step 3: Generating assembly (with full pass debug dump)..."
 ${LLC} -march=ppc32 -mcpu=ppe42 -O2 -filetype=asm \
+    -ppc-asm-full-reg-names \
     -print-after-all \
     ${OUTPUT_DIR}/test-opt.ll \
     -o ${OUTPUT_DIR}/test.s \
@@ -66,7 +58,6 @@ echo "  Generated: ${OUTPUT_DIR}/llc-debug-all-passes.txt"
 
 # -----------------------------------------------------------------------
 # P1-D BUG CHECK — inspect the assembly for invalid registers.
-# (The .s file is for inspection only; object file is compiled below.)
 # PPE42 valid GPRs:   r0-r10, r13, r28-r31
 # Invalid GPRs:       r11, r12, r14-r27  (hardware does not have these)
 # -----------------------------------------------------------------------
@@ -99,15 +90,14 @@ grep -oE '\br[0-9]+\b' ${OUTPUT_DIR}/test.s | sort -t'r' -k2 -n | uniq -c | sort
 echo ""
 
 # Step 4: Generate object file directly from LLVM IR
-# Bypasses llvm-mc and the broken PPCAsmParser (P1-C workaround).
-echo "Step 4: Generating object file directly from LLVM IR..."
+echo "Step 4: Generating object file from LLVM IR..."
 ${LLC} -march=ppc32 \
     -mcpu=ppe42 \
     -O2 \
     -filetype=obj \
     ${OUTPUT_DIR}/test-opt.ll \
     -o ${OUTPUT_DIR}/test.o
-echo "  Generated: ${OUTPUT_DIR}/test.o (directly from IR)"
+echo "  Generated: ${OUTPUT_DIR}/test.o"
 
 # Step 5: Assemble startup code
 echo "Step 5: Assembling startup.s..."
@@ -144,9 +134,7 @@ echo ""
 echo "=== Done. Output in: ${OUTPUT_DIR} ==="
 echo "  - test.ll     (LLVM IR)"
 echo "  - test-opt.ll (Optimized IR)"
-echo "  - test.s      (Assembly — inspection only, not assembled via llvm-mc)"
+echo "  - test.s      (Assembly — for inspection)"
 echo "  - test.o      (Object file — compiled directly from IR by llc)"
 echo "  - a.out       (Linked binary)"
 echo "  - a.dis       (Disassembly)"
-
-# Made with Bob

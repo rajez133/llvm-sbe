@@ -1,0 +1,35 @@
+From b40661f8aaa1977121ccadc069cb3173e3561b11 Mon Sep 17 00:00:00 2001
+From: Rajees P P <rajerpp1@in.ibm.com>
+Date: Sun, 23 Aug 2026 23:55:52 +0530
+Subject: [PATCH] PPE42: Restore ppc-asm-full-reg-names default to false
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Patch 0003 set cl::init(true) as a workaround to force full register
+names (r3, r10, d5) in llc assembly output for PPE42. This changed the
+default for ALL PPC targets built with this LLVM, not just PPE42.
+
+Revert to cl::init(false) — the upstream default. Callers that need
+full register names (e.g. our test scripts) must now pass
+-ppc-asm-full-reg-names explicitly, which is the correct behaviour.
+---
+ lib/Target/PowerPC/MCTargetDesc/PPCInstPrinter.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lib/Target/PowerPC/MCTargetDesc/PPCInstPrinter.cpp b/lib/Target/PowerPC/MCTargetDesc/PPCInstPrinter.cpp
+index f626f57..1e143bf 100644
+--- a/lib/Target/PowerPC/MCTargetDesc/PPCInstPrinter.cpp
++++ b/lib/Target/PowerPC/MCTargetDesc/PPCInstPrinter.cpp
+@@ -31,7 +31,7 @@ using namespace llvm;
+ // FIXME: Once the integrated assembler supports full register names, tie this
+ // to the verbose-asm setting.
+ static cl::opt<bool>
+-FullRegNames("ppc-asm-full-reg-names", cl::Hidden, cl::init(true),
++FullRegNames("ppc-asm-full-reg-names", cl::Hidden, cl::init(false),
+              cl::desc("Use full register names when printing assembly"));
+ 
+ // Useful for testing purposes. Prints vs{31-63} as v{0-31} respectively.
+-- 
+2.48.1
+

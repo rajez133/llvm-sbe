@@ -52,6 +52,7 @@ ${LLC} -march=ppc32 \
     -mcpu=ppe42 \
     -O2 \
     -filetype=asm \
+    -ppc-asm-full-reg-names \
     -print-after-all \
     ${OUTPUT_DIR}/test-opt.ll \
     -o /dev/null \
@@ -65,6 +66,7 @@ ${LLC} -march=ppc32 \
     -mcpu=ppe42 \
     -O2 \
     -filetype=asm \
+    -ppc-asm-full-reg-names \
     ${OUTPUT_DIR}/test-opt.ll \
     -o ${OUTPUT_DIR}/test.s
 echo "  Generated: ${OUTPUT_DIR}/test.s"
@@ -76,6 +78,7 @@ echo "Step 3b: Generating SelectionDAG debug output..."
 ${LLC} -march=ppc32 \
     -mcpu=ppe42 \
     -filetype=asm \
+    -ppc-asm-full-reg-names \
     -debug-only=isel \
     ${OUTPUT_DIR}/test-opt.ll \
     -o /dev/null \
@@ -96,8 +99,23 @@ else
 fi
 echo ""
 
-# Step 3c: Generate object file directly from LLVM IR (bypassing assembly parser)
-echo "Step 3c: Generating object file directly from LLVM IR..."
+# Step 3c: Test llvm-mc assembly parsing of the generated .s
+echo "Step 3c: Testing assembly parsing via llvm-mc..."
+if ${POWERPC_AS} -triple=powerpc-unknown-linux-gnu \
+    -mcpu=ppe42 \
+    -filetype=obj \
+    ${OUTPUT_DIR}/test.s \
+    -o ${OUTPUT_DIR}/test-from-asm.o 2>${OUTPUT_DIR}/llvm-mc-errors.txt; then
+    echo "  ✓ llvm-mc assembled test.s successfully (P1-E resolved)"
+else
+    echo "  ✗ llvm-mc failed to assemble test.s (P1-E still present)"
+    echo "  Errors:"
+    head -10 ${OUTPUT_DIR}/llvm-mc-errors.txt
+fi
+echo ""
+
+# Step 3d: Generate object file directly from LLVM IR (fallback / compare)
+echo "Step 3d: Generating object file directly from LLVM IR..."
 ${LLC} -march=ppc32 \
     -mcpu=ppe42 \
     -O2 \

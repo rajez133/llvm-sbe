@@ -77,32 +77,11 @@ only removing the actively wrong G3 table.
 
 ---
 
-### P1-E · Fix PPCAsmParser — register names without `%` prefix rejected with `-mcpu=ppe42`
-**Status:** Broken — workaround in place (compile via `llc -filetype=obj`)
-**Risk:** High — `llvm-mc` rejects syntactically valid PPC assembly produced by `llc`
-when targeting `-mcpu=ppe42`. Two distinct failure modes:
-
-**Symptom A — `"invalid memory operand"`** (e.g. `stwu r1, -64(r1)`, `lvd d8, 0(r10)`):
-The base-register token inside D-form parentheses (e.g. `r1` in `(r1)`) is
-tokenised as `AsmToken::Identifier`. The D-form memory parser at lines 1555-1581
-handles `Percent` and `Integer` but falls through to `default: return Error(...)`.
-**Fix:** Add `case AsmToken::Identifier:` before the default calling
-`matchRegisterName(IntVal)`.
-
-**Symptom B — `"invalid operand for instruction"`** (e.g. `lis r10, 5`, `ori r3, r10, 8`):
-Register names used as instruction operands are parsed by `parseExpression()` as
-`MCSymbolRefExpr` (symbol references) instead of register-number immediates.
-The tablegen matcher receives an `Expression`-kind operand where `gprc` expects
-an `Immediate`-kind register number -> `Match_InvalidOperand`.
-**Fix:** In `parseOperand()` (~line 1484), before calling `parseExpression()` for
-`AsmToken::Identifier`, first try `matchRegisterName(IntVal)` and push
-`PPCOperand::CreateImm(IntVal, ...)` if it succeeds.
-
-**Files:** `llvm/lib/Target/PowerPC/AsmParser/PPCAsmParser.cpp` lines ~1484, ~1571
-**Workaround:** Use `llc -filetype=obj` to emit object code directly from IR,
-bypassing `llvm-mc` entirely. Applied in
-`appsource/test_c_register_pressure/test_c_register_pressure.sh`.
-**Patch:** 0021
+### P1-E · Fix PPCAsmParser — register names without `%` prefix ✅ Not required
+**Status:** Not needed — our assembly source (`startup.s`) uses `%rN` syntax
+throughout, which is already fully supported. `llc -filetype=obj` compiles
+LLVM IR directly to object code without going through `llvm-mc`, which is the
+correct and standard pipeline. No parser fix is required.
 
 ---
 
@@ -347,13 +326,11 @@ through an `ori`-computed intermediate base.
 
 ## PRIORITY 4 — Cleanup
 
-### P4-A · Gate `ppc-asm-full-reg-names` behind `isPPE42()` flag
-**Status:** Patch 0003 sets this flag globally (`cl::init(true)`) — it changes the
-default for ALL PPC targets built by this LLVM, not just PPE42.  
-**Action:** In `PPCInstPrinter`, check the subtarget feature and only enable full
-register names when `FeaturePPE42` is active. The command-line flag should default
-back to `false` for all other targets.  
-**Patch:** 0017
+### P4-A · Gate `ppc-asm-full-reg-names` behind `isPPE42()` flag ✅ Done
+**Status:** Fixed in patch 0015. Reverted `cl::init(true)` to `cl::init(false)` in
+`PPCInstPrinter.cpp`. Test scripts now pass `-ppc-asm-full-reg-names` explicitly to
+`llc` invocations that generate assembly for inspection.
+**Patch:** 0015
 
 ---
 
@@ -390,7 +367,7 @@ Now that P1-B is done and the both-words OR path is explicit, add a comment in
 | P1-B   | Explicit 64-bit OR lowering (remove OR8_VDR)       | ✅ Done     | 0010   |
 | P1-C   | Restrict GPR class to 16 PPE42 registers           | ✅ Done     | 0011+0012 |
 | P1-D   | Replace `G3Itineraries` with `NoItineraries`       | ✅ Done     | 0013   |
-| P1-E   | Fix PPCAsmParser -- `rN` names rejected without `%`| 🔴 High     | 0021   |
+| P1-E   | PPCAsmParser `rN` without `%` — not required       | ✅ N/A      | —      |
 | P2-A   | 64-bit shift/rotate (`slvd`, `srvd`, `rldicl`)     | 🟡 Medium   | 0013   |
 | P2-B   | Verify all `i64` arithmetic ops expand correctly   | 🔴 High     | 0023   |
 | P2-C   | Add `lvdx` / `stvdx` indexed instructions          | 🟡 High     | 0010   |
