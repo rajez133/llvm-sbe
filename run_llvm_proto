@@ -94,7 +94,7 @@ if [ ! -d "${LLVM_SRC_DIR}/llvm" ]; then
             fi
         done
 
-        if [ ! -f "${PATCH_DIR}"/*.patch ]; then
+        if ! compgen -G "${PATCH_DIR}/*.patch" >/dev/null; then
             echo "Warning: No patch files found in ${PATCH_DIR}"
             echo "Continuing without patches..."
         fi
