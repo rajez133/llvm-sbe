@@ -122,8 +122,8 @@ echo "Starting LLVM development container..."
 docker run ${DOCKER_TTY_ARGS} \
     --rm \
     --name "${CONTAINER_NAME}" \
-    -v "${LLVM_SRC_DIR}:/root/llvm-project" \
-    -v "${CPP_SRC_DIR}:/workspace" \
+    -v "${LLVM_SRC_DIR}:/root/llvm-project:Z" \
+    -v "${CPP_SRC_DIR}:/workspace:Z" \
     -v "${VOLUME_NAME}:/build" \
     -w /root/llvm-project \
     $IMAGE_NAME \
