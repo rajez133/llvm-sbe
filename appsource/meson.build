@@ -2,7 +2,7 @@ project(
   'llvm-sbe-apps',
   'c',
   version: '0.1.0',
-  default_options: ['c_std=c99', 'warning_level=3', 'werror=true', 'optimization=2'],
+  default_options: ['c_std=c99', 'warning_level=3', 'werror=true', 'optimization=2', 'b_staticpic=false'],
 )
 
 fs = import('fs')
@@ -26,6 +26,7 @@ firmware_objects = static_library(
   runtime_sources,
   app_sources,
   include_directories: sbe_include,
+  pic: false,
   c_args: [
     '-Wno-unused-command-line-argument',
     '-ffreestanding', '-fno-builtin', '-fno-stack-protector',
@@ -64,7 +65,7 @@ custom_target(
   app_name + '-disassembly',
   input: firmware,
   output: app_name + '.dis',
-  command: [llvm_objdump, '-d', '--mcpu=ppe42', '@INPUT@'],
+  command: [llvm_objdump, '-S', '--mcpu=ppe42', '@INPUT@'],
   capture: true,
   build_by_default: true,
 )
