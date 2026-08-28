@@ -14,8 +14,20 @@ mkdir -p "${OUTPUT_DIR}"
 
 echo "=== Compiling Assembly Files ==="
 
-# Step 1: Assemble startup.s
-echo "Step 1a: Assembling startup.s..."
+# Step 1: Assemble vectors.S, startup.s, and test_simple.s
+echo "Step 1a: Assembling vectors.S..."
+llvm-mc -triple=powerpc-unknown-elf -mcpu=ppe42 -filetype=obj \
+    -o "${OUTPUT_DIR}/vectors.o" \
+    "${APPSOURCE_DIR}/vectors.S"
+
+if [ $? -eq 0 ]; then
+    echo "✓ Assembly successful: ${OUTPUT_DIR}/vectors.o"
+else
+    echo "✗ Assembly of vectors.S failed"
+    exit 1
+fi
+
+echo "Step 1b: Assembling startup.s..."
 llvm-mc -triple=powerpc-unknown-elf -mcpu=ppe42 -filetype=obj \
     -o "${OUTPUT_DIR}/startup.o" \
     "${APPSOURCE_DIR}/startup.s"
@@ -28,7 +40,7 @@ else
 fi
 
 # Step 1b: Assemble test_simple.s
-echo "Step 1b: Assembling test_simple.s..."
+echo "Step 1c: Assembling test_simple.s..."
 llvm-mc -triple=powerpc-unknown-elf -mcpu=ppe42 -filetype=obj \
     -o "${OUTPUT_DIR}/test_simple.o" \
     "${SCRIPT_DIR}/test_simple.s"
@@ -43,6 +55,8 @@ fi
 # Step 2: Link the object files
 echo "Step 2: Linking startup.o and test_simple.o..."
 ld.lld -T "${APPSOURCE_DIR}/linker" \
+    --defsym=main=_start \
+    "${OUTPUT_DIR}/vectors.o" \
     "${OUTPUT_DIR}/startup.o" \
     "${OUTPUT_DIR}/test_simple.o" \
     -o "${OUTPUT_DIR}/test_simple.elf"
