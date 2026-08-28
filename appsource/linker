@@ -1,58 +1,66 @@
 OUTPUT_FORMAT(elf32-powerpc);
+ENTRY(__system_reset);
 
-TAP_SRAM_ORIGIN = 0xFFFA0000;
-TAP_SRAM_SIZE   = 0x60000;
+SRAM_START  = 0xFFFA0000;
+SRAM_LENGTH = 0x60000;
+STACK_SIZE  = 1024;
 
-MEMORY {
-    sram    :   ORIGIN = TAP_SRAM_ORIGIN, LENGTH = TAP_SRAM_SIZE
+MEMORY
+{
+ sram : ORIGIN = SRAM_START, LENGTH = SRAM_LENGTH
 }
 
-SECTIONS {
-    /* Text, read only data and other permanent read-only sections. */
-    . = TAP_SRAM_ORIGIN;
-    _sppe_start = .;
+SECTIONS
+{
+    . = SRAM_START;
 
-    /* Vectors should be at top of memory. */
-    .startup . : {
-        KEEP(*(.startup));
-    } > sram
+    _VECTOR_START = .;
+    .vectors  _VECTOR_START  : { KEEP(*(.vectors)) } > sram
 
-    /* Text section */
-   .text . : {
-        *(.text)
-        *(.text.*)
-        . = ALIGN(8);
-    } > sram
+    /* All non-vector code goes here */
+    .text     . : { *(.text*) } > sram
 
-   /* Data sections */
-   .rodata . : {
-        *(.rodata)
-        *(.rodata.*)
-        . = ALIGN(8);
-    } > sram
+    _TEXT_SIZE = . - _VECTOR_START;
 
-   .data . : {
-        *(.data)
-        *(.data.*)
-        . = ALIGN(8);
-    } > sram
+    /* Initialized Data */
 
-   .bss . : {
-        *(.bss)
-        *(.bss.*)
-        *(COMMON)
-        . = ALIGN(8);
-    } > sram
+    . = ALIGN(8);
+    _SDA2_BASE_ = . ;
+    .sdata2  . : { *(.sdata2*) } > sram
+    .rodata  . : { *(.rodata*) } > sram
 
-   /* Discard unwanted sections */
-   /DISCARD/ : {
+    . = ALIGN(8);
+    _SDA_BASE_ = . ;
+    .sdata   . : {  *(.sdata*) } > sram
+
+    . = ALIGN(8);
+    .rwdata . : { *(.data*) } > sram
+
+    _SRAM_CLEAR_START = .;
+
+    . = ALIGN(8);
+    .sbss2   . : { *(.sbss2*)  } > sram
+    .sbss    . : { *(.sbss*)   } > sram
+
+    . = ALIGN(8);
+    .bss2    . : { *(.bss2*)   } > sram
+    .bss     . : { *(.bss*) *(COMMON) } > sram
+
+    _STACK_LIMIT = .;
+    . = . + STACK_SIZE;
+    _STACK = .;
+
+    _IMAGE_END = .;
+    _IMAGE_SIZE = . - SRAM_START;
+    _SRAM_CLEAR_SIZE  = ((_IMAGE_END - _SRAM_CLEAR_START + 7) / 8);
+
+    /DISCARD/ : {
         *(.rela.*)
         *(.rel.*)
         *(.comment)
         *(.note.*)
         *(.eh_frame)
         *(.ARM.*)
+        *(.gnu.attributes)
     }
-
-   _sbe_image_size = . - _sppe_start;
 }

@@ -11,8 +11,9 @@ while getopts "i" opt; do
 done
 
 CONTAINER_NAME="llvm-dev"
-LLVM_SRC_DIR="`pwd`/llvm"
-CPP_SRC_DIR="`pwd`/appsource"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+LLVM_SRC_DIR="${SCRIPT_DIR}/llvm"
+CPP_SRC_DIR="${SCRIPT_DIR}/appsource"
 LLVM_BUILD_DIR="${LLVM_SRC_DIR}/build"
 VOLUME_NAME="llvm-build-cache"
 
@@ -26,7 +27,7 @@ VOLUME_NAME="llvm-build-cache"
 #fi
 
 IMAGE_NAME="llvm-dev:latest"
-DOCKERFILE_PATH="Dockerfile"
+DOCKERFILE_PATH="${SCRIPT_DIR}/Dockerfile"
 
 # --- CHECK & BUILD DOCKER IMAGE ---
 if ! docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
@@ -78,7 +79,7 @@ if [ ! -d "${LLVM_SRC_DIR}/llvm" ]; then
         git commit -m "Adding original PowerPC target description files"
 
         # Apply PPE42 backend patches
-        PATCH_DIR="$(dirname "${LLVM_SRC_DIR}")/llvm_patches"
+        PATCH_DIR="${SCRIPT_DIR}/llvm_patches"
 
         # Apply patches in order with 3-way merge to handle conflicts
         for PATCH_FILE in "${PATCH_DIR}"/*.patch; do
@@ -145,7 +146,17 @@ docker run ${DOCKER_TTY_ARGS} \
 
         if [ ! -f build.ninja ]; then
             echo 'Configuring LLVM with CMake...';
-            cmake -G Ninja /root/llvm-project/llvm/llvm \
+            if [ -f /root/llvm-project/llvm/llvm/CMakeLists.txt ]; then
+                LLVM_CMAKE_SOURCE=/root/llvm-project/llvm/llvm
+            elif [ -f /root/llvm-project/llvm/CMakeLists.txt ]; then
+                LLVM_CMAKE_SOURCE=/root/llvm-project/llvm
+            else
+                echo 'Error: Could not find the LLVM CMake source directory.' >&2
+                find /root/llvm-project -maxdepth 3 -name CMakeLists.txt -print >&2
+                exit 1
+            fi
+            echo \"Using LLVM source: \${LLVM_CMAKE_SOURCE}\";
+            cmake -S \"\${LLVM_CMAKE_SOURCE}\" -B . -G Ninja \
                 -DLLVM_ENABLE_PROJECTS='clang;lld' \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DLLVM_ENABLE_ASSERTIONS=ON \
@@ -170,12 +181,12 @@ docker run ${DOCKER_TTY_ARGS} \
         echo '=== Running Assembly Test (simple_test_assembly/test_asm.sh) ==='
         cd simple_test_assembly && ./test_asm.sh && cd ..
 
-        # Build all PPE42 applications and run native tests.
+        # Build the reusable runtime and hello formatting smoke test.
         echo ''
-        echo '=== Building PPE42 applications ==='
-        meson setup output/meson-apps --cross-file cross/ppe42.ini
-        meson test -C output/meson-apps --print-errorlogs
-        meson compile -C output/meson-apps
+        echo '=== Building PPE42 application framework (hello) ==='
+        meson setup output/meson-hello --cross-file cross/ppe42.ini -Dapp=hello
+        meson test -C output/meson-hello --print-errorlogs
+        meson compile -C output/meson-hello
 
         echo ''
         echo '=== Running Basic C Test (test_c/test_c.sh) ==='
