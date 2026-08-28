@@ -21,7 +21,7 @@ def parserElf(argv):
     firstSection = b".startup"
 
     cmd = "readelf -S "+SBE_OUT
-    cmd1 = "nm "+SBE_OUT+" | grep _sbe_image_size"
+    cmd1 = "nm "+SBE_OUT+" | grep _IMAGE_SIZE"
     output = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
 
     for line in output.stdout:
