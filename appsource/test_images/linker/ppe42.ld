@@ -1,0 +1,69 @@
+/* Pull in the shared memory-map constants.
+ * LLD preprocesses linker scripts, so standard C #include works here.
+ * The CMake build passes -I<test_images/include> to the linker via
+ * --script-arg / -C so the preprocessor can find this header.        */
+#include "target.h"
+
+OUTPUT_FORMAT(elf32-powerpc);
+ENTRY(__system_reset);
+
+STACK_SIZE = 1024;
+
+MEMORY
+{
+    sram : ORIGIN = SRAM_START, LENGTH = SRAM_LENGTH
+}
+
+SECTIONS
+{
+    . = SRAM_START;
+
+    _VECTOR_START = .;
+    .vectors  _VECTOR_START : { KEEP(*(.vectors)) } > sram
+
+    /* All non-vector code goes here */
+    .text . : { *(.text*) } > sram
+
+    _TEXT_SIZE = . - _VECTOR_START;
+
+    /* Initialized data */
+    . = ALIGN(8);
+    _SDA2_BASE_ = .;
+    .sdata2 . : { *(.sdata2*) } > sram
+    .rodata . : { *(.rodata*) } > sram
+
+    . = ALIGN(8);
+    _SDA_BASE_ = .;
+    .sdata  . : { *(.sdata*)  } > sram
+
+    . = ALIGN(8);
+    .rwdata . : { *(.data*)   } > sram
+
+    _SRAM_CLEAR_START = .;
+
+    . = ALIGN(8);
+    .sbss2  . : { *(.sbss2*)  } > sram
+    .sbss   . : { *(.sbss*)   } > sram
+
+    . = ALIGN(8);
+    .bss2   . : { *(.bss2*)   } > sram
+    .bss    . : { *(.bss*) *(COMMON) } > sram
+
+    _STACK_LIMIT = .;
+    . = . + STACK_SIZE;
+    _STACK = .;
+
+    _IMAGE_END  = .;
+    _IMAGE_SIZE = . - SRAM_START;
+    _SRAM_CLEAR_SIZE = ((_IMAGE_END - _SRAM_CLEAR_START + 7) / 8);
+
+    /DISCARD/ : {
+        *(.rela.*)
+        *(.rel.*)
+        *(.comment)
+        *(.note.*)
+        *(.eh_frame)
+        *(.ARM.*)
+        *(.gnu.attributes)
+    }
+}

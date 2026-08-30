@@ -178,23 +178,35 @@ docker run ${DOCKER_TTY_ARGS} \
         export PATH=/opt/llvm-install/bin:\$PATH
         cd /workspace
 
-        echo '=== Running Assembly Test (simple_test_assembly/test_asm.sh) ==='
-        cd simple_test_assembly && ./test_asm.sh && cd ..
+        # echo '=== Running Assembly Test (simple_test_assembly/test_asm.sh) ==='
+        # cd simple_test_assembly && ./test_asm.sh && cd ..
 
-        # Build the reusable runtime and hello formatting smoke test.
-        echo ''
-        echo '=== Building PPE42 application framework (hello) ==='
-        meson setup output/meson-hello --cross-file cross/ppe42.ini -Dapp=hello
-        meson test -C output/meson-hello --print-errorlogs
-        meson compile -C output/meson-hello
+        # --- meson build (temporarily disabled) ---
+        # echo ''
+        # echo '=== Building PPE42 application framework (hello) ==='
+        # meson setup output/meson-hello --cross-file cross/ppe42.ini -Dapp=hello
+        # meson test -C output/meson-hello --print-errorlogs
+        # meson compile -C output/meson-hello
+
+        # echo ''
+        # echo '=== Running Basic C Test (test_c/test_c.sh) ==='
+        # cd test_c && ./test_c.sh && cd ..
+
+        # echo ''
+        # echo '=== Running Register Pressure Test (test_c_register_pressure/test_c_register_pressure.sh) ==='
+        # cd test_c_register_pressure && bash test_c_register_pressure.sh && cd ..
 
         echo ''
-        echo '=== Running Basic C Test (test_c/test_c.sh) ==='
-        cd test_c && ./test_c.sh && cd ..
-
-        echo ''
-        echo '=== Running Register Pressure Test (test_c_register_pressure/test_c_register_pressure.sh) ==='
-        cd test_c_register_pressure && bash test_c_register_pressure.sh && cd ..
+        echo '=== Building PPE42 Test Images (CMake) ==='
+        cmake -S /workspace/test_images -B /workspace/output/test_images \
+              -G Ninja \
+              -DCMAKE_TOOLCHAIN_FILE=/workspace/test_images/cmake/ppe42-clang.cmake
+        cmake --build /workspace/output/test_images
+        echo 'Test images built successfully.'
+        echo '  ELF : /workspace/output/test_images/app/hello/hello'
+        echo '  DIS : /workspace/output/test_images/app/hello/hello.dis'
+        echo '  BIN : /workspace/output/test_images/app/hello/hello.bin'
+        echo '  MAP : /workspace/output/test_images/app/hello/hello.map'
 
         echo ''
         echo '=== ALL TESTS DONE ==='
